@@ -1,0 +1,7 @@
+from .patient_list import PatientListSerializer
+from .patient_detail import PatientDetailSerializer
+from .patient_write import PatientWriteSerializer
+from .medical_history import MedicalHistorySerializer
+from .dental_history import DentalHistorySerializer
+from .allergy import AllergySerializer
+from .documents import PatientDocumentSerializer

@@ -1,0 +1,158 @@
+from datetime import date, datetime, timedelta
+from rest_framework import serializers
+from .models import Appointment, AppointmentType, WaitingList
+
+
+class AppointmentTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AppointmentType
+        fields = '__all__'
+
+
+# ── List serializer (calendar / daily cards) ──────────────────────────────────
+
+class AppointmentListSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_code = serializers.CharField(source='patient.patient_code', read_only=True)
+    patient_phone = serializers.CharField(source='patient.phone_primary', read_only=True)
+    dentist_name = serializers.CharField(source='dentist.get_full_name', read_only=True)
+    type_name = serializers.CharField(source='appointment_type.name', read_only=True)
+    type_color = serializers.CharField(source='appointment_type.color', read_only=True)
+    type_requires_anesthesia = serializers.BooleanField(
+        source='appointment_type.requires_anesthesia', read_only=True
+    )
+    start_time = serializers.TimeField(format='%H:%M')
+    end_time = serializers.TimeField(format='%H:%M')
+
+    class Meta:
+        model = Appointment
+        fields = [
+            'id', 'patient', 'patient_name', 'patient_code', 'patient_phone',
+            'dentist', 'dentist_name',
+            'appointment_type', 'type_name', 'type_color', 'type_requires_anesthesia',
+            'scheduled_date', 'start_time', 'end_time', 'duration_minutes',
+            'status', 'chief_complaint', 'created_at',
+        ]
+
+
+# ── Detail serializer ─────────────────────────────────────────────────────────
+
+class AppointmentDetailSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_code = serializers.CharField(source='patient.patient_code', read_only=True)
+    patient_phone = serializers.CharField(source='patient.phone_primary', read_only=True)
+    dentist_name = serializers.CharField(source='dentist.get_full_name', read_only=True)
+    type_name = serializers.CharField(source='appointment_type.name', read_only=True)
+    type_color = serializers.CharField(source='appointment_type.color', read_only=True)
+    type_requires_anesthesia = serializers.BooleanField(
+        source='appointment_type.requires_anesthesia', read_only=True
+    )
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    start_time = serializers.TimeField(format='%H:%M')
+    end_time = serializers.TimeField(format='%H:%M')
+
+    class Meta:
+        model = Appointment
+        fields = '__all__'
+        read_only_fields = ('created_by', 'created_at', 'updated_at')
+
+
+# ── Write serializer (create / update) ───────────────────────────────────────
+
+class AppointmentWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Appointment
+        fields = [
+            'patient', 'dentist', 'appointment_type',
+            'scheduled_date', 'start_time', 'end_time', 'duration_minutes',
+            'status', 'chief_complaint', 'pre_appointment_notes',
+            'treatment_notes', 'cancellation_reason',
+        ]
+
+    def validate_scheduled_date(self, value):
+        if value < date.today() and not self.instance:
+            raise serializers.ValidationError("Cannot schedule appointments in the past.")
+        return value
+
+    def validate(self, data):
+        # Resolve fields for partial updates
+        def resolved(field, default=None):
+            return data.get(field, getattr(self.instance, field, default))
+
+        start = resolved('start_time')
+        end = resolved('end_time')
+        dentist = resolved('dentist')
+        patient = resolved('patient')
+        apt_date = resolved('scheduled_date')
+        exclude = self.instance.pk if self.instance else None
+
+        if start and end:
+            if end <= start:
+                raise serializers.ValidationError({'end_time': 'End time must be after start time.'})
+
+            # Auto-compute duration_minutes if not provided
+            if 'duration_minutes' not in data:
+                dummy = date.today()
+                delta = datetime.combine(dummy, end) - datetime.combine(dummy, start)
+                data['duration_minutes'] = int(delta.total_seconds() / 60)
+
+        if dentist and apt_date and start and end:
+            # ── Dentist conflict ───────────────────────────────────────────────
+            conflict = Appointment.has_conflict(dentist, apt_date, start, end, exclude_pk=exclude)
+            if conflict:
+                raise serializers.ValidationError({
+                    'start_time': (
+                        f"Dr. {dentist.get_full_name()} is already booked from "
+                        f"{conflict.start_time.strftime('%H:%M')} to "
+                        f"{conflict.end_time.strftime('%H:%M')} "
+                        f"({conflict.appointment_type.name})."
+                    )
+                })
+
+            # ── Patient conflict ───────────────────────────────────────────────
+            if patient and Appointment.patient_has_conflict(patient, apt_date, start, end, exclude_pk=exclude):
+                raise serializers.ValidationError({
+                    'patient': 'This patient already has an appointment overlapping this time slot.'
+                })
+
+        return data
+
+    def create(self, validated_data):
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+# ── Status-only update ────────────────────────────────────────────────────────
+
+class AppointmentStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=Appointment.STATUS_CHOICES)
+    cancellation_reason = serializers.CharField(required=False, allow_blank=True)
+    treatment_notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        if data['status'] == 'cancelled' and not data.get('cancellation_reason'):
+            raise serializers.ValidationError({'cancellation_reason': 'Required when cancelling.'})
+        return data
+
+
+# ── Waiting list ──────────────────────────────────────────────────────────────
+
+class WaitingListSerializer(serializers.ModelSerializer):
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_phone = serializers.CharField(source='patient.phone_primary', read_only=True)
+    dentist_name = serializers.CharField(source='preferred_dentist.get_full_name', read_only=True)
+    type_name = serializers.CharField(source='appointment_type.name', read_only=True)
+    type_color = serializers.CharField(source='appointment_type.color', read_only=True)
+    wait_days = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WaitingList
+        fields = '__all__'
+        read_only_fields = ('added_by', 'created_at', 'updated_at', 'scheduled_appointment')
+
+    def get_wait_days(self, obj):
+        return (date.today() - obj.created_at.date()).days
+
+    def create(self, validated_data):
+        validated_data['added_by'] = self.context['request'].user
+        return super().create(validated_data)
