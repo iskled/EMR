@@ -133,6 +133,7 @@ class ToothRecord(models.Model):
         return f"Tooth {self.tooth_number} – {self.condition}"
 
 
+
 # ── Treatment Plan ────────────────────────────────────────────────────────────
 
 class TreatmentPlan(models.Model):
@@ -239,11 +240,18 @@ class ClinicalNote(models.Model):
         ('general', 'General'),
     ]
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    patient = models.ForeignKey(
-        'patients.Patient', on_delete=models.CASCADE, related_name='clinical_notes'
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
     )
-   
+
+    patient = models.ForeignKey(
+        'patients.Patient',
+        on_delete=models.CASCADE,
+        related_name='clinical_notes'
+    )
+
     appointment_id = models.UUIDField(
         null=True,
         blank=True,
@@ -251,30 +259,52 @@ class ClinicalNote(models.Model):
     )
 
     dentist = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='clinical_notes'
-    )
-    note_type = models.CharField(
-        max_length=20, choices=NOTE_TYPE_CHOICES, default='general', db_index=True
-    )
-    tooth_number = models.PositiveSmallIntegerField(
-        choices=TOOTH_CHOICES, null=True, blank=True, db_index=True
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='clinical_notes'
     )
 
-    # Structured fields
+    note_type = models.CharField(
+        max_length=20,
+        choices=NOTE_TYPE_CHOICES,
+        default='general',
+        db_index=True
+    )
+
+    # Multi-tooth support
+    tooth_numbers = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Example: [22, 26, 36]'
+    )
+
+    # SUBJECTIVE
     chief_complaint = models.TextField(blank=True)
+    family_social_history = models.TextField(blank=True)
+    medical_dental_history = models.TextField(blank=True)
+
+    # OBJECTIVE
+    general_examination = models.TextField(blank=True)
+    orofacial_examination = models.TextField(blank=True)
     clinical_findings = models.TextField(blank=True)
+
+    # ASSESSMENT
     diagnosis = models.TextField(blank=True)
+
+    # PLAN
+    treatment_planned = models.TextField(blank=True)
     treatment_performed = models.TextField(blank=True)
     materials_used = models.TextField(blank=True)
+
     anesthesia_given = models.BooleanField(default=False)
     anesthesia_type = models.CharField(max_length=100, blank=True)
     next_visit_instructions = models.TextField(blank=True)
 
-    # Free text
     notes = models.TextField(blank=True)
 
     is_signed = models.BooleanField(default=False)
     signed_at = models.DateTimeField(null=True, blank=True)
+
     note_date = models.DateField(db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -284,11 +314,13 @@ class ClinicalNote(models.Model):
         ordering = ['-note_date', '-created_at']
 
     def __str__(self):
-        tooth = f" T{self.tooth_number}" if self.tooth_number else ""
-        return f"{self.get_note_type_display()}{tooth} – {self.note_date}"
+        teeth = (
+            ",".join(map(str, self.tooth_numbers))
+            if self.tooth_numbers
+            else "General"
+        )
+        return f"{self.get_note_type_display()} T[{teeth}] – {self.note_date}"
 
-
-# ── Clinical Image ────────────────────────────────────────────────────────────
 
 class ClinicalImage(models.Model):
     IMAGE_TYPE_CHOICES = [
@@ -338,3 +370,208 @@ class ClinicalImage(models.Model):
     def __str__(self):
         tooth = f" T{self.tooth_number}" if self.tooth_number else ""
         return f"{self.get_image_type_display()}{tooth} – {self.taken_at}"
+
+class RecallSchedule(models.Model):
+    RECALL_TYPE_CHOICES = [
+        ('preventive', 'Preventive Recall'),
+        ('orthodontic', 'Orthodontic Review'),
+        ('custom', 'Custom Follow-up'),
+    ]
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+        ('missed', 'Missed'),
+    ]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+
+    patient = models.ForeignKey(
+        'patients.Patient',
+        on_delete=models.CASCADE,
+        related_name='recall_schedules'
+    )
+
+    clinical_note = models.ForeignKey(
+        ClinicalNote,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='recall_schedules'
+    )
+
+    recall_type = models.CharField(
+        max_length=20,
+        choices=RECALL_TYPE_CHOICES
+    )
+
+    due_date = models.DateField(db_index=True)
+
+    interval_days = models.PositiveIntegerField(
+        help_text="180 = 6 months, 42 = 6 weeks, 56 = 8 weeks"
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='active'
+    )
+
+    notes = models.TextField(blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='+'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'recall_schedules'
+        ordering = ['due_date']
+
+    def __str__(self):
+        return (
+            f"{self.patient.full_name} - "
+            f"{self.recall_type} - "
+            f"{self.due_date}"
+        )
+    
+
+class ClinicalTemplate(models.Model):
+
+
+    TEMPLATE_TYPES = [
+        ('chief_complaint', 'Chief Complaint'),
+        ('medical_dental_history', 'Medical / Dental History'),
+        ('family_social_history', 'Family / Social History'),
+        ('clinical_findings', 'Clinical Findings'),
+        ('general_examination', 'General Examination'),
+        ('orofacial_examination', 'Orofacial Examination'),
+        ('diagnosis', 'Diagnosis'),
+        ('treatment_planned', 'Treatment Planned'),
+        ('treatment_performed', 'Treatment Performed'),
+        ('materials_used', 'Materials Used'),
+        ('next_visit_instructions', 'Next Visit Instructions'),
+    ]
+
+    SOURCE_CHOICES = [
+        ('manual', 'Manual'),
+        ('auto', 'Auto Learned'),
+    ]
+
+    template_type = models.CharField(
+        max_length=100,
+        choices=TEMPLATE_TYPES
+    )
+
+    label = models.CharField(max_length=255)
+    content = models.TextField(blank=True)
+
+    specialty = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default='manual'
+    )
+
+    usage_count = models.IntegerField(default=1)
+    last_used = models.DateTimeField(auto_now=True)
+
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = [
+            'template_type',
+            '-usage_count',
+            '-last_used',
+            'sort_order',
+            'label'
+        ]
+
+    def __str__(self):
+        return f"{self.template_type} - {self.label}"
+    
+
+class OrthodonticCase(models.Model):
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('retention', 'Retention'),
+        ('completed', 'Completed'),
+        ('paused', 'Paused'),
+    ]
+
+    patient = models.ForeignKey(
+        'patients.Patient',
+        on_delete=models.CASCADE,
+        related_name='ortho_cases'
+    )
+
+    primary_dentist = models.ForeignKey(
+        'authentication.User',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL
+    )
+
+    appliance_type = models.CharField(max_length=100)
+    stage = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+
+    start_date = models.DateField()
+    estimated_completion = models.DateField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class OrthodonticVisit(models.Model):
+    COMPLIANCE_CHOICES = [
+        ('good', 'Good'),
+        ('fair', 'Fair'),
+        ('poor', 'Poor'),
+    ]
+
+    ortho_case = models.ForeignKey(
+        OrthodonticCase,
+        on_delete=models.CASCADE,
+        related_name='visits'
+    )
+
+    dentist = models.ForeignKey(
+        'authentication.User',
+        null=True,
+        on_delete=models.SET_NULL
+    )
+
+    visit_date = models.DateField()
+
+    upper_wire = models.CharField(max_length=100, blank=True)
+    lower_wire = models.CharField(max_length=100, blank=True)
+
+    procedures = models.JSONField(default=list)
+
+    compliance = models.CharField(
+        max_length=20,
+        choices=COMPLIANCE_CHOICES,
+        blank=True
+    )
+
+    notes = models.TextField(blank=True)
+    next_review_days = models.IntegerField(default=42)
+
+    created_at = models.DateTimeField(auto_now_add=True)

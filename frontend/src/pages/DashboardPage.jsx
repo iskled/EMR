@@ -1,4 +1,3 @@
-
 import DashboardLayout from '../layouts/DashboardLayout'
 import DashboardCard from '../components/dashboard/DashboardCard'
 
@@ -17,26 +16,26 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-          <DashboardCard title="Total Patients" value="1,248" />
-          <DashboardCard title="Today's Appointments" value="28" />
-          <DashboardCard title="Pending Tasks" value="12" />
-          <DashboardCard title="Unpaid Invoices" value="7" />
+          <DashboardCard title="Total Patients" value="API required" />
+          <DashboardCard title="Today's Appointments" value="API required" />
+          <DashboardCard title="Pending Tasks" value="Not implemented" />
+          <DashboardCard title="Unpaid Invoices" value="Not implemented" />
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm p-6">
           <h2 className="text-xl font-semibold mb-4">
-            2026 Enterprise EMR Features
+            Current Architecture Status
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
-            <div>• Role-based access control</div>
-            <div>• Chair-side clinical workflow</div>
-            <div>• Treatment planning engine</div>
-            <div>• Integrated billing architecture</div>
-            <div>• Inventory tracking</div>
-            <div>• Task delegation workflows</div>
-            <div>• Clinical audit logging</div>
-            <div>• Patient communication module</div>
+            <div>Role-based access control: backend permissions exist</div>
+            <div>Chair-side clinical workflow: components exist, route pending</div>
+            <div>Treatment planning engine: backend and service exist</div>
+            <div>Integrated billing architecture: backend API pending</div>
+            <div>Inventory tracking: not implemented</div>
+            <div>Task workflows: not implemented</div>
+            <div>Clinical audit logging: backend mixin exists</div>
+            <div>Patient communication module: not implemented</div>
           </div>
         </div>
       </div>

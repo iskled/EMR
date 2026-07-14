@@ -1,24 +1,15 @@
 import { useEffect, useState } from 'react'
+import { getClinicalTimeline } from '../../services/clinical.service'
 
-import Loader from '../ui/Loader'
-import EmptyState from '../ui/EmptyState'
-import Badge from '../ui/Badge'
-
-import {
-  getClinicalNotes,
-} from '../../services/clinical.service'
-
-export default function ClinicalTimeline({
-  patient,
-}) {
-  const [loading, setLoading] =
-    useState(true)
-
-  const [notes, setNotes] =
-    useState([])
+export default function ClinicalTimeline({ patient }) {
+  const [events, setEvents] = useState([])
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    if (!patient) return
+    if (!patient?.id) {
+      setEvents([])
+      return
+    }
 
     loadTimeline()
   }, [patient])
@@ -26,115 +17,51 @@ export default function ClinicalTimeline({
   async function loadTimeline() {
     try {
       setLoading(true)
-
-      const response =
-        await getClinicalNotes(
-          patient.id
-        )
-
-      const data =
-        response.data.results ||
-        response.data
-
-      setNotes(data)
+      const data = await getClinicalTimeline(patient.id)
+      setEvents(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error(error)
+      setEvents([])
     } finally {
       setLoading(false)
     }
   }
 
   if (loading) {
-    return <Loader />
+    return (
+      <div className="bg-white rounded shadow p-5 text-gray-500">
+        Loading timeline...
+      </div>
+    )
   }
 
-  if (!notes.length) {
+  if (!events.length) {
     return (
-      <EmptyState
-        title="No clinical notes"
-      />
+      <div className="bg-white rounded shadow p-5 text-gray-500">
+        No clinical timeline events found.
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
-      {notes.map((note) => (
+      {events.map(event => (
         <div
-          key={note.id}
-          className="
-            bg-white
-            rounded-2xl
-            shadow
-            p-5
-          "
+          key={event.id}
+          className="bg-white rounded shadow p-5"
         >
-          <div className="flex justify-between items-start">
-            <div>
-              <h3 className="font-semibold text-lg">
-                {note.note_type}
-              </h3>
-
-              <p className="text-sm text-gray-500">
-                {note.note_date}
-              </p>
-            </div>
-
-            <div className="flex gap-2">
-              {note.is_signed && (
-                <Badge variant="success">
-                  Signed
-                </Badge>
-              )}
-
-              {note.tooth_number && (
-                <Badge variant="info">
-                  T{note.tooth_number}
-                </Badge>
-              )}
-            </div>
+          <div className="flex justify-between">
+            <h3 className="font-bold">{event.title}</h3>
+            <span>{event.date}</span>
           </div>
 
-          {note.chief_complaint && (
-            <div className="mt-4">
-              <h4 className="font-medium">
-                Chief Complaint
-              </h4>
+          <p className="text-gray-600 mt-2">
+            {event.subtitle}
+          </p>
 
-              <p className="text-gray-700">
-                {note.chief_complaint}
-              </p>
-            </div>
-          )}
-
-          {note.diagnosis && (
-            <div className="mt-4">
-              <h4 className="font-medium">
-                Diagnosis
-              </h4>
-
-              <p className="text-gray-700">
-                {note.diagnosis}
-              </p>
-            </div>
-          )}
-
-          {note.treatment_performed && (
-            <div className="mt-4">
-              <h4 className="font-medium">
-                Treatment
-              </h4>
-
-              <p className="text-gray-700">
-                {note.treatment_performed}
-              </p>
-            </div>
-          )}
-
-          <div className="mt-4 text-sm text-gray-500">
-            Provider:
-            {' '}
-            {note.dentist_name}
-          </div>
+          <p className="text-sm text-gray-500 mt-3">
+            Type: {event.event_type}
+          </p>
         </div>
       ))}
     </div>

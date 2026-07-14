@@ -1,15 +1,12 @@
-
 import { NavLink } from 'react-router-dom'
 
 const menu = [
   { label: 'Dashboard', path: '/dashboard' },
   { label: 'Patients', path: '/patients' },
   { label: 'Appointments', path: '/appointments' },
-  { label: 'Clinical', path: '/clinical' },
+  { label: 'Orthodontics', path: '/orthodontics' },
   { label: 'Billing', path: '/billing' },
-  { label: 'Inventory', path: '/inventory' },
-  { label: 'Tasks', path: '/tasks' },
-  { label: 'Reports', path: '/reports' },
+  { label: 'Settings', path: '/settings' }
 ]
 
 export default function Sidebar() {
@@ -29,7 +26,9 @@ export default function Sidebar() {
             to={item.path}
             className={({ isActive }) =>
               `block px-4 py-3 rounded-lg transition ${
-                isActive ? 'bg-blue-600' : 'hover:bg-slate-800'
+                isActive
+                  ? 'bg-blue-600'
+                  : 'hover:bg-slate-800'
               }`
             }
           >

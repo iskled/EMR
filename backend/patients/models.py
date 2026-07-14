@@ -64,6 +64,39 @@ class Patient(models.Model):
 
     wants_reminder = models.BooleanField(default=False)
 
+
+    PATIENT_CATEGORY_CHOICES = [
+        ('general', 'General Dentistry'),
+        ('orthodontic', 'Orthodontic'),
+        ('both', 'General + Orthodontic'),
+    ]
+
+    REMINDER_METHOD_CHOICES = [
+        ('sms', 'SMS'),
+        ('whatsapp', 'WhatsApp'),
+        ('call', 'Phone Call'),
+        ('email', 'Email'),
+    ]
+
+    patient_category = models.CharField(
+        max_length=20,
+        choices=PATIENT_CATEGORY_CHOICES,
+        default='general'
+    )
+
+    preferred_reminder_method = models.CharField(
+        max_length=20,
+        choices=REMINDER_METHOD_CHOICES,
+        blank=True
+    )
+
+    ortho_interval_weeks = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Usually 6 or 8 weeks for braces patients"
+    )
+
+
     # Intake
     occupation = models.CharField(
         max_length=100,

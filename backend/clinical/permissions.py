@@ -31,15 +31,23 @@ class CanManageClinical(BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:
             return True
+
         role = getattr(request.user, 'role', None)
+
         if role == 'admin':
             return True
+
         if role == 'dentist':
-            # Dentists can only edit their own notes/plans
             dentist_field = getattr(obj, 'dentist', None)
+
             if dentist_field:
                 return dentist_field == request.user
+
             return True
+
+        if role == 'assistant':
+            return True
+
         return False
 
 
