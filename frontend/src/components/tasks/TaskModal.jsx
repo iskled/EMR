@@ -151,6 +151,7 @@ export default function TaskModal({ task, staff, onClose, onSave, canAssign = tr
   const [fieldErrors, setFieldErrors] = useState({})
   const [formError, setFormError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [staffSearch, setStaffSearch] = useState('')
 
   useEffect(() => {
     setForm(normalizeTask(task))
@@ -195,6 +196,25 @@ export default function TaskModal({ task, staff, onClose, onSave, canAssign = tr
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const eligibleStaff = staff.filter(member => member.is_active !== false)
+  const filteredStaff = eligibleStaff.filter(member => {
+    const haystack = [
+      member.full_name,
+      member.display_name,
+      member.name,
+      member.first_name,
+      member.last_name,
+      member.role,
+      member.email,
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(staffSearch.toLowerCase())
+  })
+
+  function staffLabel(member) {
+    const name = member.full_name || member.name || member.email
+    return `${name} - ${member.role || 'staff'} - ${member.email}`
   }
 
   return (
@@ -248,12 +268,25 @@ export default function TaskModal({ task, staff, onClose, onSave, canAssign = tr
           <section className="mt-6">
             <h3 className="text-sm font-bold uppercase tracking-wide text-gray-600">Assignment</h3>
             <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <Field label="Assign To Staff Member" error={fieldErrors.assigned_user}>
+              <div>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-semibold text-gray-800">Search Staff</span>
+                <input
+                  value={staffSearch}
+                  onChange={event => setStaffSearch(event.target.value)}
+                  className={`${inputClass} mb-2`}
+                  disabled={isSubmitting}
+                  placeholder="Search staff by name, role, or email"
+                />
+                </label>
+                <Field label="Assign To Staff Member" error={fieldErrors.assigned_user}>
                 <select name="assigned_user" value={form.assigned_user} onChange={update} className={inputClass} disabled={isSubmitting}>
                   <option value="">No individual assignee</option>
-                  {staff.map(user => <option key={user.id} value={user.id}>{user.name} ({user.role})</option>)}
+                  {filteredStaff.map(user => <option key={user.id} value={user.id}>{staffLabel(user)}</option>)}
                 </select>
-              </Field>
+                {!filteredStaff.length && <span className="mt-1 block text-sm text-gray-500">No eligible staff members found.</span>}
+                </Field>
+              </div>
               <Field label="Assign To Role" error={fieldErrors.assigned_role}>
                 <select name="assigned_role" value={form.assigned_role} onChange={update} className={inputClass} disabled={Boolean(form.assigned_user) || isSubmitting}>
                   <option value="">No role assignment</option>

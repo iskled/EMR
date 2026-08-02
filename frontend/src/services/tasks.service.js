@@ -22,18 +22,14 @@ export const TASK_TYPES = [
 export const TASK_STATUSES = [
   { value: 'pending_acceptance', label: 'Pending Acceptance' },
   { value: 'accepted', label: 'Accepted' },
-  { value: 'not_started', label: 'Not Started' },
   { value: 'in_progress', label: 'In Progress' },
-  { value: 'waiting', label: 'Waiting' },
-  { value: 'blocked', label: 'Blocked' },
-  { value: 'awaiting_review', label: 'Awaiting Review' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' },
-  { value: 'archived', label: 'Archived' },
-  { value: 'overdue', label: 'Overdue' },
+  { value: 'waiting_for_vendor', label: 'Waiting for Vendor' },
+  { value: 'waiting_for_staff', label: 'Waiting for Staff' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'closed', label: 'Closed' },
 ]
 
-export const WORKABLE_TASK_STATUSES = ['accepted', 'in_progress', 'waiting', 'blocked', 'overdue']
+export const WORKABLE_TASK_STATUSES = TASK_STATUSES.map(({ value }) => value).filter(value => value !== 'pending_acceptance')
 
 export const TASK_PRIORITIES = [
   { value: 'low', label: 'Low' },
@@ -84,8 +80,8 @@ export async function updateTask(id, payload) {
   return response.data
 }
 
-export async function deleteTask(id) {
-  await api.delete(`/tasks/${id}/`)
+export async function deleteTask(id, payload) {
+  await api.delete(`/tasks/${id}/`, { data: payload })
 }
 
 export async function acceptTask(id) {
@@ -98,8 +94,43 @@ export async function declineTask(id, reason = '') {
   return response.data
 }
 
-export async function completeTask(id) {
-  const response = await api.post(`/tasks/${id}/complete/`)
+export async function transitionTask(id, payload) {
+  const response = await api.post(`/tasks/${id}/transition/`, payload)
+  return response.data
+}
+
+export async function overrideTaskStage(id, payload) {
+  const response = await api.post(`/tasks/${id}/admin-override/`, payload)
+  return response.data
+}
+
+export async function startTaskWork(id, payload = {}) {
+  const response = await api.post(`/tasks/${id}/start-work/`, payload)
+  return response.data
+}
+
+export async function markTaskWaiting(id, payload) {
+  const response = await api.post(`/tasks/${id}/mark-waiting/`, payload)
+  return response.data
+}
+
+export async function markTaskBlocked(id, payload) {
+  const response = await api.post(`/tasks/${id}/mark-blocked/`, payload)
+  return response.data
+}
+
+export async function resumeTask(id, payload = {}) {
+  const response = await api.post(`/tasks/${id}/resume/`, payload)
+  return response.data
+}
+
+export async function addTaskProgressUpdate(id, payload) {
+  const response = await api.post(`/tasks/${id}/progress-updates/`, payload)
+  return response.data
+}
+
+export async function completeTask(id, payload = {}) {
+  const response = await api.post(`/tasks/${id}/complete/`, payload)
   return response.data
 }
 
@@ -135,6 +166,22 @@ export async function completeChecklistItem(id) {
 
 export async function addTaskComment(payload) {
   const response = await api.post('/task-comments/', payload)
+  return response.data
+}
+
+export async function uploadTaskAttachment(payload) {
+  const formData = new FormData()
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') formData.append(key, value)
+  })
+  const response = await api.post('/task-attachments/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}
+
+export async function archiveTaskAttachment(id, reason) {
+  const response = await api.post(`/task-attachments/${id}/archive/`, { reason })
   return response.data
 }
 

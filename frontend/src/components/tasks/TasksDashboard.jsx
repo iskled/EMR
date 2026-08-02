@@ -4,8 +4,11 @@ export default function TasksDashboard({ metrics }) {
   const personalRows = [
     ['Pending Acceptance', metrics?.my_pending_acceptance ?? 0],
     ['Accepted', metrics?.my_accepted ?? 0],
-    ['Active', metrics?.my_active ?? 0],
-    ['Completed', metrics?.my_completed ?? 0],
+    ['In Progress', metrics?.my_in_progress ?? 0],
+    ['Waiting for Vendor', metrics?.my_waiting_for_vendor ?? 0],
+    ['Waiting for Staff', metrics?.my_waiting_for_staff ?? 0],
+    ['Resolved', metrics?.my_resolved ?? 0],
+    ['Closed Today', metrics?.my_closed_today ?? 0],
     ['Overdue', metrics?.my_overdue ?? 0],
   ]
 

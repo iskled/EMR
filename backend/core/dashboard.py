@@ -65,6 +65,7 @@ def _tasks(user, today):
         'pending_acceptance': visible.filter(status='pending_acceptance').count(),
         'accepted': visible.filter(status='accepted').count(),
         'in_progress': visible.filter(status='in_progress').count(),
+        'waiting': visible.filter(status='waiting').count(),
         'completed_today': Task.objects.filter(assigned_user=user, status='completed', completed_at__date=today).count(),
         'unread_notifications': TaskNotification.objects.filter(recipient=user, is_read=False).count(),
         'incomplete_checklists': TaskChecklistItem.objects.filter(task__in=visible, is_required=True, is_completed=False).values('task_id').distinct().count(),

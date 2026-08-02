@@ -30,10 +30,17 @@ import {
   getTasks,
   getTaskStaff,
   markTaskNotificationRead,
+  markTaskBlocked,
+  markTaskWaiting,
+  addTaskProgressUpdate,
   reassignTask,
+  resumeTask,
+  startTaskWork,
   updateTask,
   updateTaskAlert,
   updateChecklistItem,
+  uploadTaskAttachment,
+  transitionTask,
 } from '../services/tasks.service'
 
 const initialFilters = {
@@ -172,21 +179,70 @@ export default function TasksPage() {
     await loadTasks()
   }
 
-  async function handleDecline(task) {
-    const reason = window.prompt('Decline reason') || ''
+  async function handleDecline(task, payload = {}) {
+    const reason = payload.reason?.trim()
+    if (!reason) {
+      setError('Open the task details to provide a decline reason.')
+      return
+    }
     await declineTask(task.id, reason)
     await loadTasks()
   }
 
-  async function handleComplete(task) {
-    await completeTask(task.id)
+  async function handleComplete(task, payload = {}) {
+    const summary = payload.summary?.trim()
+    if (!summary) {
+      setError('Open the task details to provide a completion summary.')
+      return
+    }
+    await completeTask(task.id, { summary })
+    await loadTasks()
+  }
+
+  async function handleStartWork(task) {
+    await startTaskWork(task.id, { note: 'Work started.' })
+    await loadTasks()
+  }
+
+  async function handleWaiting(task, payload) {
+    await markTaskWaiting(task.id, payload)
+    await loadTasks()
+  }
+
+  async function handleBlocked(task, payload) {
+    await markTaskBlocked(task.id, payload)
+    await loadTasks()
+  }
+
+  async function handleResume(task) {
+    await resumeTask(task.id, { note: 'Task resumed.' })
+    await loadTasks()
+  }
+
+  async function handleTransition(task, payload) {
+    await transitionTask(task.id, payload)
+    await loadTasks()
+  }
+
+  async function handleProgressUpdate(task, payload) {
+    await addTaskProgressUpdate(task.id, payload)
+    await loadTasks()
+  }
+
+  async function handleAttachmentUpload(task, payload) {
+    await uploadTaskAttachment({ ...payload, task: task.id })
     await loadTasks()
   }
 
   async function handleDelete(task) {
     if (!canDelete) return
-    if (!window.confirm(`Delete task "${task.title}"? This action is audited.`)) return
-    await deleteTask(task.id)
+    if (!window.confirm(`Delete task "${task.title}"? Notes: ${(task.progress_updates || []).length}. Pictures: ${(task.attachments || []).length}. This action is audited.`)) return
+    const reason = window.prompt('Enter the deletion reason:')?.trim()
+    if (!reason) return
+    const hasHistory = (task.progress_updates || []).length || (task.attachments || []).length
+    const confirmation = hasHistory ? window.prompt(`Type the exact task title to confirm: ${task.title}`) : ''
+    if (hasHistory && confirmation !== task.title) return
+    await deleteTask(task.id, { reason, confirmation })
     if (selectedTask?.id === task.id) setSelectedTask(null)
     await loadTasks()
   }
@@ -309,10 +365,10 @@ export default function TasksPage() {
       {loading && <div className="rounded-lg border border-gray-200 bg-white p-10 text-center text-gray-500">Loading tasks...</div>}
 
       {!loading && view === 'list' && (
-        <TaskTable tasks={tasks} onOpen={setSelectedTask} onAccept={handleAccept} onDecline={handleDecline} onComplete={handleComplete} canDelete={canDelete} onDelete={handleDelete} />
+        <TaskTable tasks={tasks} onOpen={setSelectedTask} onAccept={handleAccept} onDecline={handleDecline} onComplete={handleComplete} canDelete={canDelete} canExecute={!canAssign} onDelete={handleDelete} />
       )}
       {!loading && view === 'board' && (
-        <TaskBoard tasks={tasks} onOpen={setSelectedTask} onAccept={handleAccept} onDecline={handleDecline} onComplete={handleComplete} />
+        <TaskBoard tasks={tasks} onOpen={setSelectedTask} onAccept={handleAccept} onDecline={handleDecline} onComplete={handleComplete} canExecute={!canAssign} />
       )}
       {!loading && view === 'templates' && canCreate && (
         <ChecklistTemplateManager templates={templates} onCreate={handleCreateTemplate} />
@@ -340,6 +396,12 @@ export default function TasksPage() {
         onEdit={openEdit}
         onAccept={handleAccept}
         onDecline={handleDecline}
+        onStartWork={handleStartWork}
+        onWaiting={handleWaiting}
+        onBlocked={handleBlocked}
+        onResume={handleResume}
+        onProgressUpdate={handleProgressUpdate}
+        onAttachmentUpload={handleAttachmentUpload}
         onComplete={handleComplete}
         onDelete={handleDelete}
         onReassign={handleReassign}
@@ -348,6 +410,7 @@ export default function TasksPage() {
         onComment={handleComment}
         onDependencyCreate={handleDependencyCreate}
         onDependencyDelete={handleDependencyDelete}
+        onTransition={handleTransition}
         canAssign={canAssign}
         canDelete={canDelete}
       />

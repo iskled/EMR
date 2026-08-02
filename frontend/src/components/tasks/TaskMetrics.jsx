@@ -3,8 +3,10 @@ const metricLabels = {
   pending_acceptance: 'Pending',
   accepted: 'Accepted',
   in_progress: 'In Progress',
-  my_active: 'My Active',
-  completed_today: 'Done Today',
+  waiting_for_vendor: 'Waiting for Vendor',
+  waiting_for_staff: 'Waiting for Staff',
+  resolved: 'Resolved',
+  closed_today: 'Closed Today',
   overdue: 'Overdue',
   unread_notifications: 'Unread',
 }

@@ -39,7 +39,7 @@ def user_can_work_task(user, task):
     if not user or not user.is_authenticated:
         return False
     if is_admin(user):
-        return True
+        return False
     return task.assigned_user_id == user.id
 
 
@@ -56,11 +56,18 @@ class CanManageTasks(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
         action = getattr(view, 'action', None)
-        if action in {'create', 'claim', 'generate_next'} and not has_permission(request.user, 'tasks.create'):
-            return deny_creation(request, 'Task')
-        if action == 'reassign' and not has_permission(request.user, 'tasks.assign'):
-            self.message = 'You do not have permission to reassign tasks.'
-            return False
+        basename = getattr(view, 'basename', '')
+        if basename == 'task' and action in {'create', 'update', 'partial_update', 'destroy', 'reassign', 'claim', 'generate_next'}:
+            permission = {
+                'create': 'tasks.create', 'update': 'tasks.edit', 'partial_update': 'tasks.edit',
+                'destroy': 'tasks.delete', 'reassign': 'tasks.assign', 'claim': 'tasks.assign',
+                'generate_next': 'tasks.create',
+            }[action]
+            if not is_admin(request.user) or not has_permission(request.user, permission):
+                self.message = f'You do not have permission to {action.replace("_", " ")} tasks.'
+                if action in {'create', 'claim', 'generate_next'}:
+                    return deny_creation(request, 'Task', self.message)
+                return False
         return True
 
     def has_object_permission(self, request, view, obj):
@@ -69,7 +76,11 @@ class CanManageTasks(BasePermission):
             return is_admin(request.user)
         if request.method in SAFE_METHODS:
             return user_can_see_task(request.user, task)
-        return user_can_work_task(request.user, task) or has_permission(request.user, 'tasks.assign')
+        if getattr(view, 'action', None) == 'admin_override':
+            return is_admin(request.user)
+        if getattr(view, 'action', None) in {'update', 'partial_update', 'destroy', 'reassign', 'claim', 'generate_next'}:
+            return is_admin(request.user)
+        return user_can_work_task(request.user, task)
 
 
 class CanManageChecklistTemplates(BasePermission):

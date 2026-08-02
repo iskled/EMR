@@ -1,10 +1,10 @@
 import { TASK_STATUSES } from '../../services/tasks.service'
 
 function canComplete(task) {
-  return ['accepted', 'in_progress', 'waiting', 'blocked', 'overdue'].includes(task.status)
+  return task.status === 'in_progress'
 }
 
-export default function TaskBoard({ tasks, onOpen, onAccept, onDecline, onComplete }) {
+export default function TaskBoard({ tasks, onOpen, onAccept, onDecline, onComplete, canExecute = true }) {
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
       {TASK_STATUSES.filter(status => !['cancelled', 'archived'].includes(status.value)).map(status => {
@@ -24,7 +24,7 @@ export default function TaskBoard({ tasks, onOpen, onAccept, onDecline, onComple
                     <span>{task.due_date || 'No due date'}</span>
                   </div>
                   <p className="mt-2 text-xs text-gray-600">{task.assigned_user_name || task.assigned_role || 'Unassigned'}</p>
-                  {task.status === 'pending_acceptance' && (
+                  {canExecute && task.status === 'pending_acceptance' && (
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <button type="button" onClick={() => onAccept(task)} className="rounded-md bg-blue-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">Accept</button>
                       <button type="button" onClick={() => onDecline(task)} className="rounded-md border border-red-300 px-2 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Decline</button>

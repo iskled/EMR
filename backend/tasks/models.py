@@ -1,5 +1,8 @@
 from datetime import timedelta
 
+import os
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -65,13 +68,19 @@ class Task(models.Model):
     STATUS_CHOICES = [
         ('pending_acceptance', 'Pending Acceptance'),
         ('accepted', 'Accepted'),
-        ('not_started', 'Not Started'),
         ('in_progress', 'In Progress'),
-        ('waiting', 'Waiting'),
-        ('blocked', 'Blocked'),
-        ('awaiting_review', 'Awaiting Review'),
+        ('waiting_for_vendor', 'Waiting for Vendor'),
+        ('waiting_for_staff', 'Waiting for Staff'),
+        ('resolved', 'Resolved'),
+        ('closed', 'Closed'),
+        # Retained only so historical rows remain readable.
+        ('not_started', 'Not Started (Legacy)'),
+        ('waiting', 'Waiting (Legacy)'),
+        ('blocked', 'Blocked (Legacy)'),
+        ('awaiting_review', 'Awaiting Review (Legacy)'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
+        ('declined', 'Declined'),
         ('archived', 'Archived'),
         ('overdue', 'Overdue'),
     ]
@@ -82,22 +91,22 @@ class Task(models.Model):
         ('monthly', 'Monthly'),
         ('custom', 'Custom'),
     ]
-    OPEN_STATUSES = ['pending_acceptance', 'accepted', 'not_started', 'in_progress', 'waiting', 'blocked', 'awaiting_review', 'overdue']
-    TERMINAL_STATUSES = ['completed', 'cancelled', 'archived']
-    ASSIGNEE_TRANSITIONS = {
-        'pending_acceptance': {'accepted', 'cancelled'},
-        'accepted': {'in_progress', 'waiting', 'blocked', 'completed', 'cancelled'},
-        'in_progress': {'waiting', 'blocked', 'completed', 'cancelled'},
-        'waiting': {'in_progress', 'blocked', 'completed', 'cancelled'},
-        'blocked': {'in_progress', 'waiting', 'completed', 'cancelled'},
-        'overdue': {'in_progress', 'waiting', 'blocked', 'completed', 'cancelled'},
+    OPEN_STATUSES = ['pending_acceptance', 'accepted', 'in_progress', 'waiting_for_vendor', 'waiting_for_staff', 'resolved', 'not_started', 'waiting', 'blocked', 'awaiting_review', 'overdue']
+    TERMINAL_STATUSES = ['closed', 'completed', 'cancelled', 'declined', 'archived']
+    EXECUTION_TRANSITIONS = {
+        'pending_acceptance': {'accepted'},
+        'accepted': {'in_progress'},
+        'in_progress': {'accepted', 'waiting_for_vendor', 'waiting_for_staff', 'resolved'},
+        'waiting_for_vendor': {'in_progress', 'waiting_for_staff', 'resolved'},
+        'waiting_for_staff': {'in_progress', 'waiting_for_vendor', 'resolved'},
+        'resolved': {'closed', 'in_progress', 'waiting_for_vendor', 'waiting_for_staff'},
+        'closed': {'resolved'},
     }
-    ADMIN_TRANSITIONS = {
-        **ASSIGNEE_TRANSITIONS,
-        'not_started': {'pending_acceptance', 'accepted', 'in_progress', 'waiting', 'blocked', 'completed', 'cancelled', 'archived'},
-        'completed': {'archived'},
-        'cancelled': {'archived', 'accepted'},
-        'archived': {'accepted'},
+    REVERSE_TRANSITIONS = {
+        ('in_progress', 'accepted'), ('waiting_for_vendor', 'in_progress'),
+        ('waiting_for_staff', 'in_progress'), ('resolved', 'in_progress'),
+        ('resolved', 'waiting_for_vendor'), ('resolved', 'waiting_for_staff'),
+        ('closed', 'resolved'),
     }
 
     title = models.CharField(max_length=220)
@@ -115,9 +124,22 @@ class Task(models.Model):
     due_date = models.DateField(null=True, blank=True, db_index=True)
     due_time = models.TimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     accepted_at = models.DateTimeField(null=True, blank=True)
+    accepted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    started_at = models.DateTimeField(null=True, blank=True)
+    started_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     declined_at = models.DateTimeField(null=True, blank=True)
+    declined_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     decline_reason = models.TextField(blank=True)
+    progress_percentage = models.PositiveSmallIntegerField(null=True, blank=True)
+    latest_progress_summary = models.TextField(blank=True)
+    waiting_reason = models.TextField(blank=True)
+    waiting_resume_date = models.DateField(null=True, blank=True)
+    blocked_reason = models.TextField(blank=True)
+    blocker_owner = models.CharField(max_length=160, blank=True)
+    blocked_resolution_date = models.DateField(null=True, blank=True)
+    completion_summary = models.TextField(blank=True)
 
     recurrence = models.CharField(max_length=10, choices=RECURRENCE_CHOICES, default='none')
     recurrence_interval = models.PositiveSmallIntegerField(default=1)
@@ -166,9 +188,7 @@ class Task(models.Model):
         return self.required_checklist_complete() and self.dependencies_resolved()
 
     def allowed_transitions(self, user):
-        if getattr(user, 'role', '') == 'admin' or getattr(user, 'is_superuser', False):
-            return self.ADMIN_TRANSITIONS.get(self.status, set())
-        return self.ASSIGNEE_TRANSITIONS.get(self.status, set())
+        return self.EXECUTION_TRANSITIONS.get(self.status, set())
 
     def can_transition_to(self, status, user):
         if status == self.status:
@@ -295,14 +315,46 @@ class TaskComment(models.Model):
 
 
 def task_attachment_path(instance, filename):
-    return f'tasks/{instance.task_id}/attachments/{filename}'
+    extension = os.path.splitext(filename)[1].lower()
+    return f'tasks/{instance.task_id}/attachments/{uuid.uuid4().hex}{extension}'
+
+
+class TaskProgressUpdate(models.Model):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='progress_updates')
+    note = models.TextField()
+    percentage = models.PositiveSmallIntegerField(null=True, blank=True)
+    status_at_time = models.CharField(max_length=20, choices=Task.STATUS_CHOICES, db_index=True)
+    event_type = models.CharField(max_length=40, default='note', db_index=True)
+    previous_stage = models.CharField(max_length=20, blank=True)
+    new_stage = models.CharField(max_length=20, blank=True)
+    reason = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='task_progress_updates')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'task_progress_updates'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['task', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.task_id}: {self.status_at_time}'
 
 
 class TaskAttachment(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='attachments')
+    progress_update = models.ForeignKey(TaskProgressUpdate, on_delete=models.CASCADE, null=True, blank=True, related_name='attachments')
     file = models.FileField(upload_to=task_attachment_path)
     title = models.CharField(max_length=180, blank=True)
+    caption = models.TextField(blank=True)
+    original_filename = models.CharField(max_length=255, blank=True)
+    mime_type = models.CharField(max_length=120, blank=True)
+    file_size = models.PositiveIntegerField(default=0)
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='task_attachments')
+    archived_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archive_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -396,6 +448,11 @@ class TaskNotification(models.Model):
         ('task_declined', 'Task Declined'),
         ('task_completed', 'Task Completed'),
         ('task_blocked', 'Task Blocked'),
+        ('task_waiting', 'Task Waiting'),
+        ('task_started', 'Task Started'),
+        ('task_resumed', 'Task Resumed'),
+        ('task_progress_update', 'Task Progress Update'),
+        ('task_attachment_added', 'Task Attachment Added'),
         ('task_overdue', 'Task Overdue'),
         ('task_reassigned', 'Task Reassigned'),
         ('task_deleted', 'Task Deleted'),

@@ -1,11 +1,12 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from core.models import AuditEvent
-from .models import Task, TaskChecklistItem, TaskNotification
+from .models import Task, TaskAttachment, TaskChecklistItem, TaskNotification, TaskProgressUpdate
 
 
 User = get_user_model()
@@ -54,6 +55,16 @@ class TaskCreationPermissionTests(APITestCase):
         self.assertIsNone(response.data['patient'])
         self.assertTrue(TaskNotification.objects.filter(task_id=response.data['id'], recipient=self.users['assistant'], notification_type='task_assigned', is_read=False).exists())
         self.assertTrue(AuditEvent.objects.filter(action='create', resource_type='Task', resource_id=str(response.data['id']), success=True).exists())
+
+    def test_staff_api_returns_full_display_and_excludes_inactive_users(self):
+        self.login_as('admin')
+        response = self.client.get('/api/tasks/staff/')
+        self.assertEqual(response.status_code, 200)
+        assistant = next(item for item in response.data if item['email'] == self.users['assistant'].email)
+        self.assertIn('display_name', assistant)
+        self.assertIn(assistant['email'], assistant['display_name'])
+        self.assertIn(assistant['role'].title(), assistant['display_name'])
+        self.assertFalse(any(item['email'] == self.inactive_assistant.email for item in response.data))
 
     def test_admin_create_ignores_no_recurrence_interval_and_end_date(self):
         self.login_as('admin')
@@ -167,21 +178,31 @@ class TaskCreationPermissionTests(APITestCase):
         self.login_as('assistant')
         direct_complete = self.client.post(f'/api/tasks/{task.pk}/complete/', {}, format='json')
         accept = self.client.post(f'/api/tasks/{task.pk}/accept/', {}, format='json')
+        premature_complete = self.client.post(f'/api/tasks/{task.pk}/complete/', {'summary': 'Done'}, format='json')
         update = self.client.patch(f'/api/tasks/{task.pk}/', {'status': 'in_progress'}, format='json')
         checklist = self.client.post(f'/api/task-checklist-items/{item.pk}/complete/', {}, format='json')
-        complete = self.client.post(f'/api/tasks/{task.pk}/complete/', {}, format='json')
+        start = self.client.post(f'/api/tasks/{task.pk}/start-work/', {'note': 'Started'}, format='json')
+        resolve = self.client.post(f'/api/tasks/{task.pk}/transition/', {'stage': 'resolved', 'note': 'Finished all required work'}, format='json')
+        complete = self.client.post(f'/api/tasks/{task.pk}/transition/', {'stage': 'closed', 'note': 'Final review complete'}, format='json')
         self.assertEqual(direct_complete.status_code, 400)
         self.assertEqual(accept.status_code, 200)
-        self.assertEqual(update.status_code, 200)
+        self.assertEqual(accept.data['status'], 'accepted')
+        self.assertIsNone(accept.data['completed_at'])
+        self.assertEqual(update.status_code, 403)
         self.assertEqual(checklist.status_code, 200)
+        self.assertEqual(premature_complete.status_code, 400)
+        self.assertEqual(start.status_code, 200)
+        self.assertEqual(start.data['status'], 'in_progress')
+        self.assertEqual(resolve.status_code, 200)
         self.assertEqual(complete.status_code, 200)
         task.refresh_from_db()
         item.refresh_from_db()
-        self.assertEqual(task.status, 'completed')
+        self.assertEqual(task.status, 'closed')
+        self.assertEqual(task.progress_percentage, 100)
         self.assertTrue(item.is_completed)
         self.assertFalse(TaskNotification.objects.filter(task=task, recipient=self.users['assistant'], is_read=False).exists())
         self.assertTrue(AuditEvent.objects.filter(action='task_accept', resource_id=str(task.pk)).exists())
-        self.assertTrue(AuditEvent.objects.filter(action='task_completion', resource_id=str(task.pk)).exists())
+        self.assertTrue(AuditEvent.objects.filter(action='task_stage_change', resource_id=str(task.pk)).exists())
 
     def test_assigned_user_can_decline_and_admin_is_notified(self):
         task = Task.objects.create(title='Decline task', assigned_user=self.users['receptionist'], status='pending_acceptance', created_by=self.users['admin'])
@@ -189,10 +210,50 @@ class TaskCreationPermissionTests(APITestCase):
         response = self.client.post(f'/api/tasks/{task.pk}/decline/', {'reason': 'Schedule conflict'}, format='json')
         self.assertEqual(response.status_code, 200)
         task.refresh_from_db()
-        self.assertEqual(task.status, 'cancelled')
+        self.assertEqual(task.status, 'declined')
         self.assertEqual(task.decline_reason, 'Schedule conflict')
         self.assertTrue(TaskNotification.objects.filter(task=task, recipient=self.users['admin'], notification_type='task_declined').exists())
         self.assertTrue(AuditEvent.objects.filter(action='task_decline', resource_id=str(task.pk)).exists())
+
+    def test_progress_waiting_reversal_and_attachment_workflow(self):
+        task = Task.objects.create(title='Progress task', assigned_user=self.users['assistant'], status='accepted', created_by=self.users['admin'])
+        self.login_as('assistant')
+        start = self.client.post(f'/api/tasks/{task.pk}/start-work/', {'note': 'Started at desk'}, format='json')
+        progress = self.client.post(f'/api/tasks/{task.pk}/progress-updates/', {'note': 'Half done', 'percentage': 50}, format='json')
+        invalid_progress = self.client.post(f'/api/tasks/{task.pk}/progress-updates/', {'note': 'Too much', 'percentage': 101}, format='json')
+        waiting = self.client.post(f'/api/tasks/{task.pk}/transition/', {'stage': 'waiting_for_vendor', 'note': 'Need supplies'}, format='json')
+        resume = self.client.post(f'/api/tasks/{task.pk}/transition/', {'stage': 'in_progress', 'note': 'Supplies arrived', 'reason': 'Vendor delivered'}, format='json')
+        waiting_staff = self.client.post(f'/api/tasks/{task.pk}/transition/', {'stage': 'waiting_for_staff', 'note': 'Need colleague review'}, format='json')
+        self.assertEqual(start.status_code, 200)
+        self.assertEqual(start.data['status'], 'in_progress')
+        self.assertEqual(progress.status_code, 201)
+        self.assertEqual(invalid_progress.status_code, 400)
+        self.assertEqual(waiting.status_code, 200)
+        self.assertEqual(waiting.data['status'], 'waiting_for_vendor')
+        self.assertEqual(resume.status_code, 200)
+        self.assertEqual(resume.data['status'], 'in_progress')
+        self.assertEqual(waiting_staff.status_code, 200)
+        self.assertEqual(waiting_staff.data['status'], 'waiting_for_staff')
+        self.assertGreaterEqual(TaskProgressUpdate.objects.filter(task=task).count(), 5)
+        notes = list(TaskProgressUpdate.objects.filter(task=task).values_list('note', flat=True))
+        self.assertIn('Half done', notes)
+        self.assertIn('Started at desk', notes)
+
+    def test_attachment_upload_validation_and_authenticated_download(self):
+        task = Task.objects.create(title='Attachment task', assigned_user=self.users['assistant'], status='in_progress', created_by=self.users['admin'])
+        self.login_as('assistant')
+        png = SimpleUploadedFile('evidence.png', b'\x89PNG\r\n\x1a\n' + b'0' * 20, content_type='image/png')
+        upload = self.client.post('/api/task-attachments/', {'task': task.pk, 'file': png, 'caption': 'Evidence'}, format='multipart')
+        bad = SimpleUploadedFile('bad.txt', b'plain text', content_type='text/plain')
+        invalid = self.client.post('/api/task-attachments/', {'task': task.pk, 'file': bad}, format='multipart')
+        self.assertEqual(upload.status_code, 201)
+        self.assertEqual(invalid.status_code, 400)
+        attachment = TaskAttachment.objects.get(pk=upload.data['id'])
+        download = self.client.get(f'/api/task-attachments/{attachment.pk}/download/')
+        self.assertEqual(download.status_code, 200)
+        self.login_as('dentist')
+        forbidden = self.client.get(f'/api/task-attachments/{attachment.pk}/download/')
+        self.assertEqual(forbidden.status_code, 404)
 
     def test_non_admin_update_cannot_change_assignment_or_recurrence(self):
         task = Task.objects.create(title='Protected fields', assigned_user=self.users['receptionist'], status='accepted', created_by=self.users['admin'])
@@ -208,7 +269,7 @@ class TaskCreationPermissionTests(APITestCase):
         deletable = Task.objects.create(title='Admin delete', created_by=self.users['admin'])
         self.login_as('admin')
         response = self.client.post(f'/api/tasks/{task.pk}/generate-next/', {}, format='json')
-        delete = self.client.delete(f'/api/tasks/{deletable.pk}/')
+        delete = self.client.delete(f'/api/tasks/{deletable.pk}/', {'reason': 'Created for deletion test'}, format='json')
         self.assertEqual(response.status_code, 201)
         self.assertEqual(delete.status_code, 204)
         self.assertTrue(Task.objects.filter(parent_task=task).exists())

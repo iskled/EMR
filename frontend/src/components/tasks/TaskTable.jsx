@@ -3,10 +3,10 @@ function formatStatus(value) {
 }
 
 function canComplete(task) {
-  return ['accepted', 'in_progress', 'waiting', 'blocked', 'overdue'].includes(task.status)
+  return task.status === 'in_progress'
 }
 
-export default function TaskTable({ tasks, onOpen, onAccept, onDecline, onComplete, canDelete = false, onDelete }) {
+export default function TaskTable({ tasks, onOpen, onAccept, onDecline, onComplete, canDelete = false, canExecute = true, onDelete }) {
   return (
     <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
       <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -17,6 +17,7 @@ export default function TaskTable({ tasks, onOpen, onAccept, onDecline, onComple
             <th className="px-4 py-3">Priority</th>
             <th className="px-4 py-3">Due</th>
             <th className="px-4 py-3">Assignee</th>
+            <th className="px-4 py-3">Progress</th>
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3 text-right">Actions</th>
           </tr>
@@ -33,11 +34,20 @@ export default function TaskTable({ tasks, onOpen, onAccept, onDecline, onComple
               <td className="px-4 py-3 capitalize">{task.task_type.replaceAll('_', ' ')}</td>
               <td className="px-4 py-3 capitalize">{task.priority}</td>
               <td className={`px-4 py-3 ${task.is_overdue ? 'font-semibold text-red-600' : 'text-gray-700'}`}>{task.due_date || '-'}</td>
-              <td className="px-4 py-3">{task.assigned_user_name || task.assigned_role || 'Unassigned'}</td>
+              <td className="px-4 py-3">
+                <p className="font-semibold">{task.assigned_user_name || task.assigned_role || 'Unassigned'}</p>
+                {task.assigned_user_email && <p className="text-xs text-gray-500">{task.assigned_user_role} - {task.assigned_user_email}</p>}
+              </td>
+              <td className="px-4 py-3">
+                <div className="h-2 w-24 rounded-full bg-gray-100">
+                  <div className="h-2 rounded-full bg-blue-600" style={{ width: `${task.progress_percentage ?? 0}%` }} />
+                </div>
+                <p className="mt-1 text-xs text-gray-500">{task.progress_percentage ?? 0}%</p>
+              </td>
               <td className="px-4 py-3 capitalize">{formatStatus(task.status)}</td>
               <td className="px-4 py-3 text-right">
                 <div className="flex flex-wrap justify-end gap-2">
-                  {task.status === 'pending_acceptance' && (
+                  {canExecute && task.status === 'pending_acceptance' && (
                     <>
                       <button type="button" onClick={() => onAccept(task)} className="rounded-md bg-blue-600 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-700">Accept</button>
                       <button type="button" onClick={() => onDecline(task)} className="rounded-md border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Decline</button>
@@ -51,7 +61,7 @@ export default function TaskTable({ tasks, onOpen, onAccept, onDecline, onComple
           ))}
           {!tasks.length && (
             <tr>
-              <td colSpan="7" className="px-4 py-10 text-center text-gray-500">No tasks match the active filters.</td>
+              <td colSpan="8" className="px-4 py-10 text-center text-gray-500">No tasks match the active filters.</td>
             </tr>
           )}
         </tbody>
