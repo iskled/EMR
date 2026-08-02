@@ -1,9 +1,13 @@
 import { TASK_STATUSES } from '../../services/tasks.service'
 
-export default function TaskBoard({ tasks, onOpen, onComplete }) {
+function canComplete(task) {
+  return ['accepted', 'in_progress', 'waiting', 'blocked', 'overdue'].includes(task.status)
+}
+
+export default function TaskBoard({ tasks, onOpen, onAccept, onDecline, onComplete }) {
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-      {TASK_STATUSES.filter(status => status.value !== 'cancelled').map(status => {
+      {TASK_STATUSES.filter(status => !['cancelled', 'archived'].includes(status.value)).map(status => {
         const columnTasks = tasks.filter(task => task.status === status.value)
         return (
           <section key={status.value} className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
@@ -20,7 +24,13 @@ export default function TaskBoard({ tasks, onOpen, onComplete }) {
                     <span>{task.due_date || 'No due date'}</span>
                   </div>
                   <p className="mt-2 text-xs text-gray-600">{task.assigned_user_name || task.assigned_role || 'Unassigned'}</p>
-                  {task.status !== 'completed' && (
+                  {task.status === 'pending_acceptance' && (
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => onAccept(task)} className="rounded-md bg-blue-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">Accept</button>
+                      <button type="button" onClick={() => onDecline(task)} className="rounded-md border border-red-300 px-2 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Decline</button>
+                    </div>
+                  )}
+                  {canComplete(task) && (
                     <button type="button" onClick={() => onComplete(task)} className="mt-3 w-full rounded-md bg-green-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-green-700">
                       Complete
                     </button>

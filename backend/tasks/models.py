@@ -63,12 +63,17 @@ class Task(models.Model):
         ('urgent', 'Urgent'),
     ]
     STATUS_CHOICES = [
+        ('pending_acceptance', 'Pending Acceptance'),
+        ('accepted', 'Accepted'),
         ('not_started', 'Not Started'),
         ('in_progress', 'In Progress'),
+        ('waiting', 'Waiting'),
         ('blocked', 'Blocked'),
         ('awaiting_review', 'Awaiting Review'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
+        ('archived', 'Archived'),
+        ('overdue', 'Overdue'),
     ]
     RECURRENCE_CHOICES = [
         ('none', 'None'),
@@ -77,7 +82,23 @@ class Task(models.Model):
         ('monthly', 'Monthly'),
         ('custom', 'Custom'),
     ]
-    OPEN_STATUSES = ['not_started', 'in_progress', 'blocked', 'awaiting_review']
+    OPEN_STATUSES = ['pending_acceptance', 'accepted', 'not_started', 'in_progress', 'waiting', 'blocked', 'awaiting_review', 'overdue']
+    TERMINAL_STATUSES = ['completed', 'cancelled', 'archived']
+    ASSIGNEE_TRANSITIONS = {
+        'pending_acceptance': {'accepted', 'cancelled'},
+        'accepted': {'in_progress', 'waiting', 'blocked', 'completed', 'cancelled'},
+        'in_progress': {'waiting', 'blocked', 'completed', 'cancelled'},
+        'waiting': {'in_progress', 'blocked', 'completed', 'cancelled'},
+        'blocked': {'in_progress', 'waiting', 'completed', 'cancelled'},
+        'overdue': {'in_progress', 'waiting', 'blocked', 'completed', 'cancelled'},
+    }
+    ADMIN_TRANSITIONS = {
+        **ASSIGNEE_TRANSITIONS,
+        'not_started': {'pending_acceptance', 'accepted', 'in_progress', 'waiting', 'blocked', 'completed', 'cancelled', 'archived'},
+        'completed': {'archived'},
+        'cancelled': {'archived', 'accepted'},
+        'archived': {'accepted'},
+    }
 
     title = models.CharField(max_length=220)
     description = models.TextField(blank=True)
@@ -94,6 +115,9 @@ class Task(models.Model):
     due_date = models.DateField(null=True, blank=True, db_index=True)
     due_time = models.TimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    declined_at = models.DateTimeField(null=True, blank=True)
+    decline_reason = models.TextField(blank=True)
 
     recurrence = models.CharField(max_length=10, choices=RECURRENCE_CHOICES, default='none')
     recurrence_interval = models.PositiveSmallIntegerField(default=1)
@@ -141,6 +165,16 @@ class Task(models.Model):
     def can_complete(self):
         return self.required_checklist_complete() and self.dependencies_resolved()
 
+    def allowed_transitions(self, user):
+        if getattr(user, 'role', '') == 'admin' or getattr(user, 'is_superuser', False):
+            return self.ADMIN_TRANSITIONS.get(self.status, set())
+        return self.ASSIGNEE_TRANSITIONS.get(self.status, set())
+
+    def can_transition_to(self, status, user):
+        if status == self.status:
+            return True
+        return status in self.allowed_transitions(user)
+
     def _next_due_date(self):
         if not self.due_date or self.recurrence == 'none':
             return None
@@ -177,6 +211,7 @@ class Task(models.Model):
             start_date=next_due,
             due_date=next_due,
             due_time=self.due_time,
+            status='pending_acceptance' if self.assigned_user_id else 'not_started',
             recurrence=self.recurrence,
             recurrence_interval=self.recurrence_interval,
             recurrence_weekdays=self.recurrence_weekdays,
@@ -352,3 +387,39 @@ class TaskAlert(models.Model):
 
     def __str__(self):
         return f'{self.alert_type}: {self.task}'
+
+
+class TaskNotification(models.Model):
+    NOTIFICATION_TYPES = [
+        ('task_assigned', 'Task Assigned'),
+        ('task_accepted', 'Task Accepted'),
+        ('task_declined', 'Task Declined'),
+        ('task_completed', 'Task Completed'),
+        ('task_blocked', 'Task Blocked'),
+        ('task_overdue', 'Task Overdue'),
+        ('task_reassigned', 'Task Reassigned'),
+        ('task_deleted', 'Task Deleted'),
+    ]
+
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='task_notifications')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='notifications')
+    notification_type = models.CharField(max_length=30, choices=NOTIFICATION_TYPES, db_index=True)
+    title = models.CharField(max_length=220)
+    message = models.CharField(max_length=320)
+    is_read = models.BooleanField(default=False, db_index=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'task_notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', 'is_read']),
+            models.Index(fields=['task', 'notification_type']),
+        ]
+
+    def mark_read(self, user=None):
+        self.is_read = True
+        self.read_at = timezone.now()
+        self.save(update_fields=['is_read', 'read_at'])

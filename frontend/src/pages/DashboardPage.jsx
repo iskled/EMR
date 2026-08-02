@@ -27,7 +27,7 @@ const permissions = [
   "patients.write",
   "appointments.write",
   "inventory.usage",
-  "tasks.write",
+  "tasks.create",
 ];
 export default function DashboardPage() {
   const { user, initializing = true } = useAuth() || {},
@@ -140,7 +140,7 @@ export default function DashboardPage() {
           onSaved={load}
         />
       )}{" "}
-      {action === "task" && (
+      {action === "task" && capabilities["tasks.create"] && (
         <TaskModal
           task={null}
           staff={refs.staff}

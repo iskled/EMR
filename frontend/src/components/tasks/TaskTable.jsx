@@ -1,4 +1,12 @@
-export default function TaskTable({ tasks, onOpen, onComplete, onClaim }) {
+function formatStatus(value) {
+  return value ? value.replaceAll('_', ' ') : ''
+}
+
+function canComplete(task) {
+  return ['accepted', 'in_progress', 'waiting', 'blocked', 'overdue'].includes(task.status)
+}
+
+export default function TaskTable({ tasks, onOpen, onAccept, onDecline, onComplete, canDelete = false, onDelete }) {
   return (
     <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
       <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -26,11 +34,17 @@ export default function TaskTable({ tasks, onOpen, onComplete, onClaim }) {
               <td className="px-4 py-3 capitalize">{task.priority}</td>
               <td className={`px-4 py-3 ${task.is_overdue ? 'font-semibold text-red-600' : 'text-gray-700'}`}>{task.due_date || '-'}</td>
               <td className="px-4 py-3">{task.assigned_user_name || task.assigned_role || 'Unassigned'}</td>
-              <td className="px-4 py-3 capitalize">{task.status.replaceAll('_', ' ')}</td>
+              <td className="px-4 py-3 capitalize">{formatStatus(task.status)}</td>
               <td className="px-4 py-3 text-right">
-                <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => onClaim(task)} className="rounded-md border border-gray-300 px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50">Claim</button>
-                  <button type="button" onClick={() => onComplete(task)} className="rounded-md bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700">Complete</button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {task.status === 'pending_acceptance' && (
+                    <>
+                      <button type="button" onClick={() => onAccept(task)} className="rounded-md bg-blue-600 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-700">Accept</button>
+                      <button type="button" onClick={() => onDecline(task)} className="rounded-md border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Decline</button>
+                    </>
+                  )}
+                  {canComplete(task) && <button type="button" onClick={() => onComplete(task)} className="rounded-md bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700">Complete</button>}
+                  {canDelete && <button type="button" onClick={() => onDelete(task)} className="rounded-md border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">Delete</button>}
                 </div>
               </td>
             </tr>

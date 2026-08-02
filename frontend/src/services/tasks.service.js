@@ -20,13 +20,20 @@ export const TASK_TYPES = [
 ]
 
 export const TASK_STATUSES = [
+  { value: 'pending_acceptance', label: 'Pending Acceptance' },
+  { value: 'accepted', label: 'Accepted' },
   { value: 'not_started', label: 'Not Started' },
   { value: 'in_progress', label: 'In Progress' },
+  { value: 'waiting', label: 'Waiting' },
   { value: 'blocked', label: 'Blocked' },
   { value: 'awaiting_review', label: 'Awaiting Review' },
   { value: 'completed', label: 'Completed' },
   { value: 'cancelled', label: 'Cancelled' },
+  { value: 'archived', label: 'Archived' },
+  { value: 'overdue', label: 'Overdue' },
 ]
+
+export const WORKABLE_TASK_STATUSES = ['accepted', 'in_progress', 'waiting', 'blocked', 'overdue']
 
 export const TASK_PRIORITIES = [
   { value: 'low', label: 'Low' },
@@ -57,6 +64,16 @@ export async function getTaskStaff() {
   return response.data
 }
 
+export async function getTaskNotifications() {
+  const response = await api.get('/tasks/notifications/')
+  return unwrapList(response.data)
+}
+
+export async function markTaskNotificationRead(id) {
+  const response = await api.post(`/tasks/notifications/${id}/read/`)
+  return response.data
+}
+
 export async function createTask(payload) {
   const response = await api.post('/tasks/', payload)
   return response.data
@@ -67,13 +84,22 @@ export async function updateTask(id, payload) {
   return response.data
 }
 
-export async function completeTask(id) {
-  const response = await api.post(`/tasks/${id}/complete/`)
+export async function deleteTask(id) {
+  await api.delete(`/tasks/${id}/`)
+}
+
+export async function acceptTask(id) {
+  const response = await api.post(`/tasks/${id}/accept/`)
   return response.data
 }
 
-export async function claimTask(id) {
-  const response = await api.post(`/tasks/${id}/claim/`)
+export async function declineTask(id, reason = '') {
+  const response = await api.post(`/tasks/${id}/decline/`, { reason })
+  return response.data
+}
+
+export async function completeTask(id) {
+  const response = await api.post(`/tasks/${id}/complete/`)
   return response.data
 }
 

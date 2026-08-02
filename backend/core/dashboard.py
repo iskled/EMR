@@ -9,7 +9,7 @@ from authentication.models import User
 from clinical.models import ClinicalNote, OrthodonticCase, OrthodonticVisit, RecallSchedule, TreatmentPlanItem
 from inventory.models import InventoryAlert, StockMovement
 from patients.models import Patient
-from tasks.models import Task, TaskChecklistItem
+from tasks.models import Task, TaskChecklistItem, TaskNotification
 from .models import AuditEvent, LoginAttempt, SecurityAlert
 from .permissions import has_permission
 
@@ -51,7 +51,7 @@ def _appointments(user, today):
 def _tasks(user, today):
     visible = Task.objects.filter(status__in=Task.OPEN_STATUSES)
     if user.role != 'admin':
-        visible = visible.filter(Q(assigned_user=user) | Q(assigned_role=user.role) | Q(watchers=user)).distinct()
+        visible = visible.filter(assigned_user=user).distinct()
     week = today + timedelta(days=7)
     summary = {
         'open': visible.count(), 'my': visible.filter(assigned_user=user).count(),
@@ -62,13 +62,18 @@ def _tasks(user, today):
         'urgent': visible.filter(priority='urgent').count(),
         'blocked': visible.filter(status='blocked').count(),
         'unassigned': visible.filter(assigned_user__isnull=True, assigned_role='').count(),
+        'pending_acceptance': visible.filter(status='pending_acceptance').count(),
+        'accepted': visible.filter(status='accepted').count(),
+        'in_progress': visible.filter(status='in_progress').count(),
+        'completed_today': Task.objects.filter(assigned_user=user, status='completed', completed_at__date=today).count(),
+        'unread_notifications': TaskNotification.objects.filter(recipient=user, is_read=False).count(),
         'incomplete_checklists': TaskChecklistItem.objects.filter(task__in=visible, is_required=True, is_completed=False).values('task_id').distinct().count(),
     }
     summary['items'] = [{
         'id': item.pk, 'title': item.title, 'priority': item.priority, 'status': item.status,
         'due_date': item.due_date, 'assigned_to': (item.assigned_user.get_full_name() or item.assigned_user.email) if item.assigned_user else item.assigned_role or 'Unassigned',
-        'can_claim': item.assigned_user_id is None and has_permission(user, 'tasks.write'),
-        'can_complete': has_permission(user, 'tasks.write'),
+        'can_claim': False,
+        'can_complete': item.status in {'accepted', 'in_progress', 'waiting', 'blocked', 'overdue'} and has_permission(user, 'tasks.write'),
     } for item in visible.select_related('assigned_user').order_by('due_date', '-priority')[:8]]
     return summary
 
@@ -137,7 +142,7 @@ def dashboard_payload(user):
     start_month = today.replace(day=1)
     data = {
         'generated_at': timezone.now(), 'date': today, 'role': user.role,
-        'capabilities': {key: has_permission(user, key) for key in ['patients.write', 'appointments.write', 'clinical.view', 'clinical.write', 'orthodontics.view', 'inventory.view', 'inventory.usage', 'tasks.view', 'tasks.write', 'reports.view', 'users.manage', 'security.view', 'audit.view']},
+        'capabilities': {key: has_permission(user, key) for key in ['patients.write', 'appointments.write', 'clinical.view', 'clinical.write', 'orthodontics.view', 'inventory.view', 'inventory.usage', 'tasks.view', 'tasks.create', 'tasks.write', 'tasks.assign', 'reports.view', 'users.manage', 'security.view', 'audit.view']},
         'appointments': appointments,
         'metrics': {'appointments_today': appointments['total'], **appointments['statuses']},
         'tasks': _safe_section('tasks', lambda: _tasks(user, today), errors, {'open': 0, 'my': 0, 'team': 0, 'due_today': 0, 'due_week': 0, 'overdue': 0, 'urgent': 0, 'blocked': 0, 'unassigned': 0, 'incomplete_checklists': 0, 'items': []}),

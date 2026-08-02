@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -20,6 +20,7 @@ from .models import (
     TaskChecklistItem,
     TaskComment,
     TaskDependency,
+    TaskNotification,
 )
 from .permissions import CanManageChecklistTemplates, CanManageTasks
 from .serializers import (
@@ -30,6 +31,7 @@ from .serializers import (
     TaskChecklistItemSerializer,
     TaskCommentSerializer,
     TaskDependencySerializer,
+    TaskNotificationSerializer,
     TaskSerializer,
 )
 
@@ -60,16 +62,15 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         )
         if user.role == 'admin' or user.is_superuser:
             return qs
-        return qs.filter(
-            Q(created_by=user)
-            | Q(assigned_user=user)
-            | Q(assigned_role=user.role)
-            | Q(watchers=user)
-        ).distinct()
+        return qs.filter(assigned_user=user).distinct()
 
     def perform_create(self, serializer):
-        instance = serializer.save(created_by=self.request.user)
+        assigned_user = serializer.validated_data.get('assigned_user')
+        status_value = 'pending_acceptance' if assigned_user else serializer.validated_data.get('status', 'not_started')
+        instance = serializer.save(created_by=self.request.user, status=status_value)
         self._log(self.request, 'create', instance)
+        self._record_assignment(instance, None, '', instance.assigned_user, instance.assigned_role, 'Task created')
+        self._notify_assignment(instance, 'task_assigned')
 
     def _record_assignment(self, task, from_user, from_role, to_user, to_role, notes=''):
         TaskAssignmentHistory.objects.create(
@@ -81,6 +82,70 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             changed_by=self.request.user,
             notes=notes,
         )
+
+    def _admin_recipients(self):
+        return User.objects.filter(is_active=True, role='admin')
+
+    def _notify(self, task, recipient, notification_type, title, message):
+        if not recipient:
+            return None
+        return TaskNotification.objects.create(
+            task=task,
+            recipient=recipient,
+            actor=self.request.user,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+        )
+
+    def _notify_assignment(self, task, notification_type='task_assigned'):
+        if task.assigned_user:
+            label = 'assigned' if notification_type == 'task_assigned' else 'reassigned'
+            self._notify(
+                task,
+                task.assigned_user,
+                notification_type,
+                f'New Task Assigned: {task.title}',
+                f'Assigned by {self.request.user.get_full_name() or self.request.user.email}.',
+            )
+
+    def _notify_admins(self, task, notification_type, title, message):
+        for admin in self._admin_recipients():
+            if admin.id != self.request.user.id:
+                self._notify(task, admin, notification_type, title, message)
+
+    def perform_update(self, serializer):
+        task = self.get_object()
+        previous = {
+            'status': task.status,
+            'assigned_user': task.assigned_user_id,
+            'assigned_role': task.assigned_role,
+        }
+        instance = serializer.save()
+        current = {
+            'status': instance.status,
+            'assigned_user': instance.assigned_user_id,
+            'assigned_role': instance.assigned_role,
+        }
+        if previous != current:
+            audit_event(
+                'task_status_change',
+                'Task',
+                instance.pk,
+                request=self.request,
+                patient_id=instance.patient_id,
+                previous_values=previous,
+                new_values=current,
+                source_module='tasks',
+            )
+        if previous['status'] != instance.status:
+            if instance.status == 'blocked':
+                self._notify_admins(instance, 'task_blocked', f'Task Blocked: {instance.title}', 'Task was marked blocked.')
+            if instance.status == 'completed':
+                self._notify_admins(instance, 'task_completed', f'Task Completed: {instance.title}', 'Task was completed.')
+        if previous['assigned_user'] != instance.assigned_user_id:
+            self._record_assignment(instance, task.assigned_user, task.assigned_role, instance.assigned_user, instance.assigned_role, 'Task edited')
+            self._notify_assignment(instance, 'task_reassigned')
 
     @action(detail=False, methods=['get'])
     def staff(self, request):
@@ -98,19 +163,78 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             'total_open': qs.filter(status__in=Task.OPEN_STATUSES).count(),
             'my_tasks': qs.filter(assigned_user=request.user, status__in=Task.OPEN_STATUSES).count(),
             'team_tasks': qs.filter(assigned_role=request.user.role, status__in=Task.OPEN_STATUSES).count(),
+            'pending_acceptance': qs.filter(status='pending_acceptance').count(),
+            'accepted': qs.filter(status='accepted').count(),
+            'in_progress': qs.filter(status='in_progress').count(),
             'due_today': qs.filter(due_date=today, status__in=Task.OPEN_STATUSES).count(),
             'due_this_week': qs.filter(due_date__gte=today, due_date__lte=today + timedelta(days=7), status__in=Task.OPEN_STATUSES).count(),
             'overdue': qs.filter(due_date__lt=today, status__in=Task.OPEN_STATUSES).count(),
             'urgent': qs.filter(priority='urgent', status__in=Task.OPEN_STATUSES).count(),
             'blocked': qs.filter(status='blocked').count(),
             'completed': qs.filter(status='completed').count(),
+            'completed_today': qs.filter(status='completed', completed_at__date=today).count(),
             'unassigned': qs.filter(assigned_user__isnull=True, assigned_role='', status__in=Task.OPEN_STATUSES).count(),
+            'my_pending_acceptance': qs.filter(assigned_user=request.user, status='pending_acceptance').count(),
+            'my_accepted': qs.filter(assigned_user=request.user, status='accepted').count(),
+            'my_active': qs.filter(assigned_user=request.user, status__in=['accepted', 'in_progress', 'waiting', 'blocked', 'overdue']).count(),
+            'my_completed': qs.filter(assigned_user=request.user, status='completed').count(),
+            'my_overdue': qs.filter(assigned_user=request.user, due_date__lt=today, status__in=Task.OPEN_STATUSES).count(),
+            'unread_notifications': TaskNotification.objects.filter(recipient=request.user, is_read=False).count(),
             'clinical_tasks': qs.filter(task_type__in=['clinical', 'orthodontic'], status__in=Task.OPEN_STATUSES).count(),
             'administrative_tasks': qs.filter(task_type='administrative', status__in=Task.OPEN_STATUSES).count(),
             'by_status': list(qs.values('status').annotate(count=Count('id')).order_by('status')),
             'by_type': list(qs.values('task_type').annotate(count=Count('id')).order_by('task_type')),
         }
         return Response(data)
+
+    @action(detail=False, methods=['get'])
+    def notifications(self, request):
+        notifications = TaskNotification.objects.filter(recipient=request.user).select_related('task', 'actor')[:50]
+        return Response(TaskNotificationSerializer(notifications, many=True).data)
+
+    @action(detail=False, methods=['post'], url_path=r'notifications/(?P<notification_id>[0-9]+)/read')
+    def read_notification(self, request, notification_id=None):
+        notification = TaskNotification.objects.select_related('task').filter(
+            id=notification_id,
+            recipient=request.user,
+        ).first()
+        if not notification:
+            return Response({'error': 'Notification not found.'}, status=404)
+        notification.mark_read(user=request.user)
+        return Response(TaskNotificationSerializer(notification).data)
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        task = self.get_object()
+        if task.assigned_user_id != request.user.id:
+            return Response({'error': 'Only the assigned user can accept this task.'}, status=403)
+        if task.status != 'pending_acceptance':
+            return Response({'error': 'Only pending acceptance tasks can be accepted.'}, status=400)
+        previous = {'status': task.status}
+        task.status = 'accepted'
+        task.accepted_at = timezone.now()
+        task.save(update_fields=['status', 'accepted_at', 'updated_at'])
+        task.notifications.filter(recipient=request.user, is_read=False).update(is_read=True, read_at=timezone.now())
+        audit_event('task_accept', 'Task', task.pk, request=request, patient_id=task.patient_id, previous_values=previous, new_values={'status': task.status}, source_module='tasks')
+        self._notify_admins(task, 'task_accepted', f'Task Accepted: {task.title}', f'{request.user.get_full_name() or request.user.email} accepted the task.')
+        return Response(TaskSerializer(task, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def decline(self, request, pk=None):
+        task = self.get_object()
+        if task.assigned_user_id != request.user.id:
+            return Response({'error': 'Only the assigned user can decline this task.'}, status=403)
+        if task.status != 'pending_acceptance':
+            return Response({'error': 'Only pending acceptance tasks can be declined.'}, status=400)
+        reason = (request.data.get('reason') or '').strip()
+        previous = {'status': task.status, 'assigned_user': task.assigned_user_id}
+        task.status = 'cancelled'
+        task.declined_at = timezone.now()
+        task.decline_reason = reason
+        task.save(update_fields=['status', 'declined_at', 'decline_reason', 'updated_at'])
+        audit_event('task_decline', 'Task', task.pk, request=request, patient_id=task.patient_id, previous_values=previous, new_values={'status': task.status, 'decline_reason': reason}, source_module='tasks')
+        self._notify_admins(task, 'task_declined', f'Task Declined: {task.title}', reason or 'Task was declined by the assignee.')
+        return Response(TaskSerializer(task, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def claim(self, request, pk=None):
@@ -119,7 +243,8 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         old_role = task.assigned_role
         task.assigned_user = request.user
         task.assigned_role = ''
-        task.save(update_fields=['assigned_user', 'assigned_role', 'updated_at'])
+        task.status = 'pending_acceptance'
+        task.save(update_fields=['assigned_user', 'assigned_role', 'status', 'updated_at'])
         self._record_assignment(task, old_user, old_role, request.user, '', 'Claimed task')
         audit_event('task_assignment', 'Task', task.pk, request=request, patient_id=task.patient_id, source_module='tasks', metadata={'to_user': request.user.email})
         return Response(TaskSerializer(task, context={'request': request}).data)
@@ -135,25 +260,37 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             return Response({'error': 'Assign to either a user or a role, not both.'}, status=400)
         task.assigned_user_id = assigned_user
         task.assigned_role = assigned_role
-        task.save(update_fields=['assigned_user', 'assigned_role', 'updated_at'])
+        task.status = 'pending_acceptance' if assigned_user else 'not_started'
+        task.save(update_fields=['assigned_user', 'assigned_role', 'status', 'updated_at'])
         self._record_assignment(task, old_user, old_role, task.assigned_user, assigned_role, request.data.get('notes', ''))
         audit_event('task_reassignment', 'Task', task.pk, request=request, patient_id=task.patient_id, source_module='tasks', metadata={'assigned_user': assigned_user, 'assigned_role': assigned_role})
+        self._notify_assignment(task, 'task_reassigned')
         return Response(TaskSerializer(task, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         task = self.get_object()
+        if not task.can_transition_to('completed', request.user):
+            return Response({'error': 'This task must be accepted before it can be completed.'}, status=400)
         if not task.can_complete():
             return Response({'error': 'Required checklist items and dependencies must be completed first.'}, status=400)
         task.status = 'completed'
         task.completed_at = timezone.now()
         task.save(update_fields=['status', 'completed_at', 'updated_at'])
         task.alerts.filter(status='open').update(status='resolved')
+        task.notifications.filter(recipient=request.user, is_read=False).update(is_read=True, read_at=timezone.now())
         next_task = task.generate_next_occurrence(user=request.user)
         audit_event('task_completion', 'Task', task.pk, request=request, patient_id=task.patient_id, source_module='tasks')
+        self._notify_admins(task, 'task_completed', f'Task Completed: {task.title}', 'Task was completed.')
         payload = TaskSerializer(task, context={'request': request}).data
         payload['next_task_id'] = next_task.id if next_task else None
         return Response(payload)
+
+    def destroy(self, request, *args, **kwargs):
+        task = self.get_object()
+        previous = TaskSerializer(task, context={'request': request}).data
+        audit_event('task_delete', 'Task', task.pk, request=request, patient_id=task.patient_id, previous_values=previous, source_module='tasks')
+        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'], url_path='apply-template')
     def apply_template(self, request, pk=None):
@@ -182,6 +319,7 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         next_task = task.generate_next_occurrence(user=request.user)
         if not next_task:
             return Response({'error': 'No future recurrence could be generated.'}, status=400)
+        audit_event('create', 'Task', next_task.pk, request=request, patient_id=next_task.patient_id, source_module='tasks', metadata={'system_generated': False, 'source_task': str(task.pk)})
         return Response(TaskSerializer(next_task, context={'request': request}).data, status=201)
 
 
@@ -217,6 +355,7 @@ class TaskChecklistItemViewSet(AuditLogMixin, viewsets.ModelViewSet):
         item.completed_by = request.user
         item.completed_at = timezone.now()
         item.save(update_fields=['is_completed', 'completed_by', 'completed_at'])
+        audit_event('task_checklist_completion', 'TaskChecklistItem', item.pk, request=request, patient_id=item.task.patient_id, source_module='tasks', metadata={'task_id': str(item.task_id)})
         return Response(TaskChecklistItemSerializer(item).data)
 
 

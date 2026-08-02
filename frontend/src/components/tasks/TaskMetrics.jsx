@@ -1,12 +1,12 @@
 const metricLabels = {
   total_open: 'Open',
-  my_tasks: 'Mine',
-  team_tasks: 'Team',
-  due_today: 'Due Today',
+  pending_acceptance: 'Pending',
+  accepted: 'Accepted',
+  in_progress: 'In Progress',
+  my_active: 'My Active',
+  completed_today: 'Done Today',
   overdue: 'Overdue',
-  urgent: 'Urgent',
-  blocked: 'Blocked',
-  unassigned: 'Unassigned',
+  unread_notifications: 'Unread',
 }
 
 export default function TaskMetrics({ metrics }) {
@@ -15,7 +15,7 @@ export default function TaskMetrics({ metrics }) {
       {Object.entries(metricLabels).map(([key, label]) => (
         <div key={key} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</p>
-          <p className={`mt-2 text-2xl font-bold ${key === 'overdue' ? 'text-red-600' : 'text-gray-900'}`}>
+          <p className={`mt-2 text-2xl font-bold ${['overdue', 'unread_notifications'].includes(key) ? 'text-red-600' : 'text-gray-900'}`}>
             {metrics?.[key] ?? 0}
           </p>
         </div>

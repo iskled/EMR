@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
+from core.permissions import has_permission
 
 from .models import (
     ChecklistTemplate,
@@ -12,6 +14,7 @@ from .models import (
     TaskChecklistItem,
     TaskComment,
     TaskDependency,
+    TaskNotification,
 )
 
 User = get_user_model()
@@ -140,6 +143,22 @@ class TaskAlertSerializer(serializers.ModelSerializer):
         read_only_fields = ['acknowledged_by', 'acknowledged_at', 'dismissed_by', 'dismissed_at', 'created_at', 'updated_at']
 
 
+class TaskNotificationSerializer(serializers.ModelSerializer):
+    task_title = serializers.CharField(source='task.title', read_only=True)
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TaskNotification
+        fields = [
+            'id', 'recipient', 'actor', 'actor_name', 'task', 'task_title',
+            'notification_type', 'title', 'message', 'is_read', 'read_at', 'created_at',
+        ]
+        read_only_fields = ['recipient', 'actor', 'read_at', 'created_at']
+
+    def get_actor_name(self, obj):
+        return obj.actor.get_full_name() or obj.actor.email if obj.actor else ''
+
+
 class TaskAssignmentHistorySerializer(serializers.ModelSerializer):
     from_user_name = serializers.SerializerMethodField()
     to_user_name = serializers.SerializerMethodField()
@@ -163,6 +182,8 @@ class TaskAssignmentHistorySerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
+    assigned_role = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    recurrence_interval = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     assigned_user_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     patient_name = serializers.SerializerMethodField()
@@ -173,6 +194,7 @@ class TaskSerializer(serializers.ModelSerializer):
     dependencies = TaskDependencySerializer(many=True, read_only=True)
     comments = TaskCommentSerializer(many=True, read_only=True)
     alerts = TaskAlertSerializer(many=True, read_only=True)
+    notifications = TaskNotificationSerializer(many=True, read_only=True)
     assignment_history = TaskAssignmentHistorySerializer(many=True, read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
 
@@ -182,15 +204,19 @@ class TaskSerializer(serializers.ModelSerializer):
             'id', 'title', 'description', 'task_type', 'priority', 'status',
             'assigned_user', 'assigned_user_name', 'assigned_role', 'watchers',
             'created_by', 'created_by_name', 'start_date', 'due_date', 'due_time',
-            'completed_at', 'recurrence', 'recurrence_interval', 'recurrence_weekdays',
+            'completed_at', 'accepted_at', 'declined_at', 'decline_reason',
+            'recurrence', 'recurrence_interval', 'recurrence_weekdays',
             'recurrence_end_date', 'last_generated_at', 'parent_task', 'patient',
             'patient_name', 'appointment', 'appointment_label', 'orthodontic_case',
             'orthodontic_case_label', 'orthodontic_visit', 'inventory_item',
             'inventory_item_name', 'inventory_alert', 'tags', 'created_at', 'updated_at',
-            'is_overdue', 'checklist_items', 'dependencies', 'comments', 'alerts',
+            'is_overdue', 'checklist_items', 'dependencies', 'comments', 'alerts', 'notifications',
             'assignment_history',
         ]
-        read_only_fields = ['created_by', 'completed_at', 'last_generated_at', 'created_at', 'updated_at']
+        read_only_fields = [
+            'created_by', 'completed_at', 'accepted_at', 'declined_at',
+            'last_generated_at', 'created_at', 'updated_at',
+        ]
 
     def get_assigned_user_name(self, obj):
         return obj.assigned_user.get_full_name() or obj.assigned_user.email if obj.assigned_user else ''
@@ -218,17 +244,66 @@ class TaskSerializer(serializers.ModelSerializer):
         status = attrs.get('status', self.instance.status if self.instance else None)
         assigned_user = attrs.get('assigned_user', self.instance.assigned_user if self.instance else None)
         assigned_role = attrs.get('assigned_role', self.instance.assigned_role if self.instance else '')
+        start_date = attrs.get('start_date', self.instance.start_date if self.instance else None)
+        due_date = attrs.get('due_date', self.instance.due_date if self.instance else None)
+        recurrence = attrs.get('recurrence', self.instance.recurrence if self.instance else 'none')
+        recurrence_interval = attrs.get('recurrence_interval', self.instance.recurrence_interval if self.instance else None)
+        recurrence_end_date = attrs.get('recurrence_end_date', self.instance.recurrence_end_date if self.instance else None)
+        errors = {}
+
+        if assigned_role is None:
+            attrs['assigned_role'] = ''
+            assigned_role = ''
+
         if assigned_user and assigned_role:
-            raise serializers.ValidationError('Assign to either a user or a role, not both.')
+            errors['assigned_role'] = 'Assign to either a user or a role, not both.'
+        if assigned_user and not assigned_user.is_active:
+            errors['assigned_user'] = 'The selected assignee is inactive.'
+        if assigned_role and assigned_role not in {'admin', 'dentist', 'assistant', 'receptionist'}:
+            errors['assigned_role'] = 'Select a valid assignment role.'
+        if status and status not in dict(Task.STATUS_CHOICES):
+            errors['status'] = 'Select a valid task status.'
+        if start_date and due_date and due_date < start_date:
+            errors['due_date'] = 'Due date cannot be earlier than start date.'
+        if recurrence not in dict(Task.RECURRENCE_CHOICES):
+            errors['recurrence'] = 'Select a valid repeat pattern.'
+        if recurrence == 'none':
+            attrs.pop('recurrence_end_date', None)
+            attrs['recurrence_interval'] = 1
+        else:
+            if not recurrence_interval or recurrence_interval < 1:
+                errors['recurrence_interval'] = 'Repeat interval must be at least 1.'
+            if recurrence_end_date and due_date and recurrence_end_date < due_date:
+                errors['recurrence_end_date'] = 'Repeat until cannot be earlier than the due date.'
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        request = self.context.get('request')
+        if self.instance and status and request and not self.instance.can_transition_to(status, request.user):
+            raise serializers.ValidationError(
+                f"Cannot change task status from {self.instance.get_status_display()} to {dict(Task.STATUS_CHOICES).get(status, status)}."
+            )
         if status == 'completed' and self.instance and not self.instance.can_complete():
             raise serializers.ValidationError('Required checklist items and dependencies must be completed first.')
+        if self.instance and request and not has_permission(request.user, 'tasks.assign'):
+            protected = {'assigned_user', 'assigned_role', 'recurrence', 'recurrence_interval', 'recurrence_weekdays', 'recurrence_end_date', 'parent_task'}
+            submitted_fields = set(getattr(self, 'initial_data', {}).keys())
+            if protected.intersection(submitted_fields):
+                raise PermissionDenied('You do not have permission to change task assignment or recurrence.')
         return attrs
 
     def update(self, instance, validated_data):
         old_status = instance.status
         instance = super().update(instance, validated_data)
+        now = timezone.now()
+        update_fields = []
+        if instance.status == 'accepted' and old_status != 'accepted' and not instance.accepted_at:
+            instance.accepted_at = now
+            update_fields.append('accepted_at')
         if instance.status == 'completed' and old_status != 'completed':
-            instance.completed_at = timezone.now()
-            instance.save(update_fields=['completed_at', 'updated_at'])
+            instance.completed_at = now
+            update_fields.extend(['completed_at'])
             instance.generate_next_occurrence(user=self.context['request'].user)
+        if update_fields:
+            instance.save(update_fields=[*update_fields, 'updated_at'])
         return instance

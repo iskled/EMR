@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
+import { hasPermission } from '../permissions/permissions'
 import ChecklistTemplateManager from '../components/tasks/ChecklistTemplateManager'
 import TaskAlerts from '../components/tasks/TaskAlerts'
 import TaskBoard from '../components/tasks/TaskBoard'
@@ -9,20 +12,24 @@ import TaskModal from '../components/tasks/TaskModal'
 import TaskTable from '../components/tasks/TaskTable'
 import TasksDashboard from '../components/tasks/TasksDashboard'
 import {
+  acceptTask,
   addTaskComment,
   applyChecklistTemplate,
-  claimTask,
   completeChecklistItem,
   completeTask,
   createChecklistTemplate,
   createTask,
   createTaskDependency,
+  declineTask,
+  deleteTask,
   deleteTaskDependency,
   getChecklistTemplates,
   getTaskAlerts,
   getTaskMetrics,
+  getTaskNotifications,
   getTasks,
   getTaskStaff,
+  markTaskNotificationRead,
   reassignTask,
   updateTask,
   updateTaskAlert,
@@ -44,10 +51,16 @@ function listFromResponse(data) {
 }
 
 export default function TasksPage() {
+  const { user } = useAuth() || {}
+  const location = useLocation()
+  const canCreate = hasPermission(user, 'tasks.create')
+  const canAssign = hasPermission(user, 'tasks.assign')
+  const canDelete = user?.role === 'admin' || user?.is_superuser
   const [view, setView] = useState('list')
   const [filters, setFilters] = useState(initialFilters)
   const [tasks, setTasks] = useState([])
   const [metrics, setMetrics] = useState(null)
+  const [notifications, setNotifications] = useState([])
   const [templates, setTemplates] = useState([])
   const [alerts, setAlerts] = useState([])
   const [staff, setStaff] = useState([])
@@ -56,6 +69,9 @@ export default function TasksPage() {
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
+  const creationRequested = location.pathname === '/tasks/new' || new URLSearchParams(location.search).get('action') === 'new'
+  const requestedTaskId = new URLSearchParams(location.search).get('task')
 
   const requestParams = useMemo(() => {
     return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== ''))
@@ -66,9 +82,18 @@ export default function TasksPage() {
   }, [])
 
   useEffect(() => {
+    if (creationRequested && canCreate) openCreate()
+  }, [creationRequested, canCreate])
+
+  useEffect(() => {
     const timeout = setTimeout(loadTasks, 250)
     return () => clearTimeout(timeout)
   }, [requestParams])
+
+  useEffect(() => {
+    const interval = setInterval(loadNotifications, 15000)
+    return () => clearInterval(interval)
+  }, [])
 
   async function loadReferences() {
     const [staffData, templateData] = await Promise.all([
@@ -83,16 +108,20 @@ export default function TasksPage() {
     try {
       setLoading(true)
       setError('')
-      const [taskData, metricData, alertData] = await Promise.all([
+      const [taskData, metricData, alertData, notificationData] = await Promise.all([
         getTasks(requestParams),
         getTaskMetrics(),
         getTaskAlerts({ status: 'open' }),
+        getTaskNotifications(),
       ])
       const taskList = listFromResponse(taskData)
       setTasks(taskList)
       setMetrics(metricData)
       setAlerts(alertData)
-      if (selectedTask) {
+      setNotifications(notificationData)
+      if (requestedTaskId) {
+        setSelectedTask(taskList.find(task => String(task.id) === String(requestedTaskId)) || null)
+      } else if (selectedTask) {
         const refreshed = taskList.find(task => task.id === selectedTask.id)
         setSelectedTask(refreshed || null)
       }
@@ -103,21 +132,49 @@ export default function TasksPage() {
     }
   }
 
+  async function loadNotifications() {
+    try {
+      const [notificationData, metricData] = await Promise.all([
+        getTaskNotifications(),
+        getTaskMetrics(),
+      ])
+      setNotifications(notificationData)
+      setMetrics(metricData)
+    } catch {
+      return null
+    }
+  }
+
   function openCreate() {
+    if (!canCreate) return
     setEditingTask(null)
+    setSuccessMessage('')
     setShowModal(true)
   }
 
   function openEdit(task) {
     setEditingTask(task)
+    setSuccessMessage('')
     setShowModal(true)
   }
 
   async function saveTask(task, payload) {
-    if (task?.id) await updateTask(task.id, payload)
-    else await createTask(payload)
+    const savedTask = task?.id ? await updateTask(task.id, payload) : await createTask(payload)
     setShowModal(false)
     setEditingTask(null)
+    setSuccessMessage(task?.id ? 'Task updated successfully' : 'Task created successfully')
+    await loadTasks()
+    return savedTask
+  }
+
+  async function handleAccept(task) {
+    await acceptTask(task.id)
+    await loadTasks()
+  }
+
+  async function handleDecline(task) {
+    const reason = window.prompt('Decline reason') || ''
+    await declineTask(task.id, reason)
     await loadTasks()
   }
 
@@ -126,8 +183,18 @@ export default function TasksPage() {
     await loadTasks()
   }
 
-  async function handleClaim(task) {
-    await claimTask(task.id)
+  async function handleDelete(task) {
+    if (!canDelete) return
+    if (!window.confirm(`Delete task "${task.title}"? This action is audited.`)) return
+    await deleteTask(task.id)
+    if (selectedTask?.id === task.id) setSelectedTask(null)
+    await loadTasks()
+  }
+
+  async function handleNotificationOpen(notification) {
+    await markTaskNotificationRead(notification.id)
+    const task = tasks.find(item => item.id === notification.task)
+    if (task) setSelectedTask(task)
     await loadTasks()
   }
 
@@ -172,6 +239,8 @@ export default function TasksPage() {
     setTemplates(await getChecklistTemplates())
   }
 
+  const unreadNotifications = notifications.filter(notification => !notification.is_read)
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm xl:flex-row xl:items-center xl:justify-between">
@@ -179,10 +248,40 @@ export default function TasksPage() {
           <h1 className="text-3xl font-bold text-gray-900">Tasks</h1>
           <p className="text-sm text-gray-500">Practice administration, clinical follow-up, checklist, and alert workflows.</p>
         </div>
-        <button type="button" onClick={openCreate} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+        {canCreate && <button type="button" onClick={openCreate} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
           New task
-        </button>
+        </button>}
       </div>
+
+      {creationRequested && !canCreate && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900">Task creation is restricted to administrators. You can continue managing tasks assigned to you.</div>}
+
+      {successMessage && (
+        <div role="status" className="rounded-lg border border-green-200 bg-green-50 p-4 text-green-800">
+          {successMessage}
+        </div>
+      )}
+
+      {unreadNotifications.length > 0 && (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-blue-900">Task Notifications</h2>
+            <span className="rounded-full bg-blue-600 px-2 py-1 text-xs font-semibold text-white">{unreadNotifications.length}</span>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+            {unreadNotifications.slice(0, 4).map(notification => (
+              <button
+                key={notification.id}
+                type="button"
+                onClick={() => handleNotificationOpen(notification)}
+                className="rounded-md border border-blue-200 bg-white p-3 text-left hover:border-blue-400"
+              >
+                <span className="block text-sm font-semibold text-gray-900">{notification.title}</span>
+                <span className="mt-1 block text-xs text-gray-600">{notification.message}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <TaskMetrics metrics={metrics} />
       <TasksDashboard metrics={metrics} />
@@ -192,7 +291,7 @@ export default function TasksPage() {
         {[
           ['list', 'List'],
           ['board', 'Board'],
-          ['templates', 'Templates'],
+          ...(canCreate ? [['templates', 'Templates']] : []),
           ['alerts', 'Alerts'],
         ].map(([key, label]) => (
           <button
@@ -210,24 +309,25 @@ export default function TasksPage() {
       {loading && <div className="rounded-lg border border-gray-200 bg-white p-10 text-center text-gray-500">Loading tasks...</div>}
 
       {!loading && view === 'list' && (
-        <TaskTable tasks={tasks} onOpen={setSelectedTask} onComplete={handleComplete} onClaim={handleClaim} />
+        <TaskTable tasks={tasks} onOpen={setSelectedTask} onAccept={handleAccept} onDecline={handleDecline} onComplete={handleComplete} canDelete={canDelete} onDelete={handleDelete} />
       )}
       {!loading && view === 'board' && (
-        <TaskBoard tasks={tasks} onOpen={setSelectedTask} onComplete={handleComplete} />
+        <TaskBoard tasks={tasks} onOpen={setSelectedTask} onAccept={handleAccept} onDecline={handleDecline} onComplete={handleComplete} />
       )}
-      {!loading && view === 'templates' && (
+      {!loading && view === 'templates' && canCreate && (
         <ChecklistTemplateManager templates={templates} onCreate={handleCreateTemplate} />
       )}
       {!loading && view === 'alerts' && (
         <TaskAlerts alerts={alerts} onAction={handleAlertAction} />
       )}
 
-      {showModal && (
+      {showModal && (editingTask || canCreate) && (
         <TaskModal
           task={editingTask}
           staff={staff}
           onClose={() => setShowModal(false)}
           onSave={saveTask}
+          canAssign={canAssign}
         />
       )}
 
@@ -238,13 +338,18 @@ export default function TasksPage() {
         templates={templates}
         onClose={() => setSelectedTask(null)}
         onEdit={openEdit}
+        onAccept={handleAccept}
+        onDecline={handleDecline}
         onComplete={handleComplete}
+        onDelete={handleDelete}
         onReassign={handleReassign}
         onChecklistToggle={handleChecklistToggle}
         onApplyTemplate={handleApplyTemplate}
         onComment={handleComment}
         onDependencyCreate={handleDependencyCreate}
         onDependencyDelete={handleDependencyDelete}
+        canAssign={canAssign}
+        canDelete={canDelete}
       />
     </div>
   )

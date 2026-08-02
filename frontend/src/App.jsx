@@ -38,6 +38,7 @@ export default function App() {
       <Route path="/orthodontics" element={protectedPage(<OrthodonticsPage />, 'orthodontics.view')} />
       <Route path="/reports" element={protectedPage(<ReportsPage />, 'reports.view')} />
       <Route path="/tasks" element={protectedPage(<TasksPage />, 'tasks.view')} />
+      <Route path="/tasks/new" element={protectedPage(<TasksPage />, 'tasks.view')} />
       <Route path="/audit" element={protectedPage(<AuditLogPage />, 'audit.view')} />
       <Route path="/security" element={protectedPage(<SecurityPage />, 'security.view')} />
       <Route path="/administration/users" element={protectedPage(<UserManagementPage />, 'users.manage')} />
