@@ -32,9 +32,6 @@ class CanManagePatients(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:
-            if request.user.role == 'dentist':
-                return obj.assigned_dentist_id == request.user.id
-
             return True
 
         if request.method == 'DELETE':

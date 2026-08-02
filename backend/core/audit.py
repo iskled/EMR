@@ -1,6 +1,7 @@
 import logging
 from django.db import models
 from core.models import AuditLog
+from core.audit_service import audit_event, model_snapshot, patient_id_for
 
 audit_logger = logging.getLogger('dental.audit')
 
@@ -23,14 +24,26 @@ class AuditLogMixin:
             )
         except Exception:
             audit_logger.exception("Failed to write audit log")
+        audit_event(
+            action=action,
+            resource_type=instance.__class__.__name__,
+            resource_id=str(instance.pk),
+            request=request,
+            patient_id=patient_id_for(instance),
+            previous_values=changes.get('previous', {}) if isinstance(changes, dict) else {},
+            new_values=changes.get('new', changes or model_snapshot(instance)) if isinstance(changes, dict) else model_snapshot(instance),
+            success=True,
+            source_module=instance._meta.app_label,
+        )
 
     def perform_create(self, serializer):
         instance = serializer.save()
         self._log(self.request, 'create', instance)
 
     def perform_update(self, serializer):
+        previous = model_snapshot(self.get_object()) if hasattr(self, 'get_object') else {}
         instance = serializer.save()
-        self._log(self.request, 'update', instance)
+        self._log(self.request, 'update', instance, {'previous': previous, 'new': model_snapshot(instance)})
 
     def perform_destroy(self, instance):
         self._log(self.request, 'delete', instance)

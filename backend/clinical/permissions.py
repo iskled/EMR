@@ -24,7 +24,7 @@ class CanManageClinical(BasePermission):
             )
 
         if role == 'receptionist':
-            return request.method in SAFE_METHODS
+            return False
 
 
 

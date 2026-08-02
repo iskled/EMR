@@ -5,3 +5,4 @@ from .medical_history import MedicalHistorySerializer
 from .dental_history import DentalHistorySerializer
 from .allergy import AllergySerializer
 from .documents import PatientDocumentSerializer
+from .communications import PatientCommunicationSerializer

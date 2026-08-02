@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
+from core.audit_service import audit_event, model_snapshot
 from core.audit import AuditLogMixin
 from .models import Appointment, AppointmentType, WaitingList
 from .serializers import (
@@ -61,6 +62,7 @@ class AppointmentViewSet(AuditLogMixin, viewsets.ModelViewSet):
         serializer = AppointmentStatusSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        old_status = appointment.status
         fields_to_update = ['status', 'updated_at']
         appointment.status = serializer.validated_data['status']
         if serializer.validated_data.get('cancellation_reason'):
@@ -71,6 +73,24 @@ class AppointmentViewSet(AuditLogMixin, viewsets.ModelViewSet):
             fields_to_update.append('treatment_notes')
 
         appointment.save(update_fields=fields_to_update)
+        reminder = getattr(appointment, 'recall_schedule', None)
+        if reminder and reminder.status == 'booked':
+            from clinical.reminder_workflow import transition_reminder
+            if appointment.status == Appointment.STATUS_COMPLETED:
+                transition_reminder(reminder, 'completed', request.user, request=request)
+            elif appointment.status == Appointment.STATUS_CANCELLED:
+                transition_reminder(reminder, 'confirmed', request.user, request=request)
+        audit_event(
+            'appointment_status_change',
+            'Appointment',
+            appointment.pk,
+            request=request,
+            patient_id=appointment.patient_id,
+            previous_values={'status': old_status},
+            new_values={'status': appointment.status},
+            source_module='appointments',
+            metadata={'cancellation_reason': serializer.validated_data.get('cancellation_reason', '')},
+        )
         return Response(AppointmentDetailSerializer(appointment).data)
 
     # ── Calendar view (grouped by date) ────────────────────────────────────────

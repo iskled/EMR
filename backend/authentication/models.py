@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
+from django.utils import timezone
 
 
 class UserManager(BaseUserManager):
@@ -58,6 +59,11 @@ class User(AbstractUser):
         null=True
     )
 
+    failed_login_count = models.PositiveSmallIntegerField(default=0)
+    locked_until = models.DateTimeField(null=True, blank=True)
+    last_password_change = models.DateTimeField(null=True, blank=True)
+    must_change_password = models.BooleanField(default=False)
+
     USERNAME_FIELD = 'email'
 
     REQUIRED_FIELDS = []
@@ -66,3 +72,23 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+    @property
+    def is_locked(self):
+        return bool(self.locked_until and self.locked_until > timezone.now())
+
+
+class PasswordHistory(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_history')
+    password_hash = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'password_history'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.email} password history'

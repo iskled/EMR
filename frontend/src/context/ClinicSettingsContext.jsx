@@ -1,0 +1,4 @@
+import {createContext,useCallback,useContext,useEffect,useMemo,useState} from 'react';import {useAuth} from '../auth/AuthContext';import {getClinicSettings} from '../services/clinicSettings.service'
+const fallback={clinic_name:'Beyond Smile Dental Clinic',short_name:'BSDC EMR',tagline:'Dental Practice Platform',logo_url:null,primary_colour:'#2563eb',secondary_colour:'#0f172a',currency:'NGN',locale:'en-NG'};const Context=createContext({settings:fallback,refresh:()=>{}})
+export function ClinicSettingsProvider({children}){const {user}=useAuth()||{};const [settings,setSettings]=useState(fallback);const refresh=useCallback(async()=>{if(!user)return;try{setSettings({...fallback,...await getClinicSettings()})}catch{setSettings(fallback)}},[user]);useEffect(()=>{refresh()},[refresh]);const value=useMemo(()=>({settings,refresh}),[settings,refresh]);return <Context.Provider value={value}>{children}</Context.Provider>}
+export const useClinicSettings=()=>useContext(Context)

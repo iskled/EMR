@@ -1,23 +1,14 @@
-from datetime import date
-from .models import Patient
+from django.db import transaction
+from django.utils import timezone
+from .models import PatientDailySequence
 
 
-def generate_patient_code():
-    year = date.today().year
-    prefix = f"PT-{year}-"
-
-    last_patient = (
-        Patient.objects.filter(patient_code__startswith=prefix)
-        .order_by('-patient_code')
-        .first()
-    )
-
-    if last_patient:
-        try:
-            last_num = int(last_patient.patient_code.split('-')[-1])
-        except Exception:
-            last_num = 0
-    else:
-        last_num = 0
-
-    return f"{prefix}{last_num + 1:05d}"
+def generate_patient_code(registration_date=None):
+    registration_date = registration_date or timezone.localdate()
+    with transaction.atomic():
+        sequence, _ = PatientDailySequence.objects.select_for_update().get_or_create(sequence_date=registration_date)
+        sequence.last_sequence += 1
+        if sequence.last_sequence > 99:
+            raise ValueError('Daily patient registration limit reached.')
+        sequence.save(update_fields=['last_sequence'])
+        return f'{registration_date:%Y%m%d}{sequence.last_sequence:02d}'

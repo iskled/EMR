@@ -1,17 +1,6 @@
-import ClinicalWorkspace from '../clinical/ClinicalWorkspace'
-
-export default function PatientWorkspace({ patient }) {
-  if (!patient) {
-    return (
-      <div className="bg-white rounded-2xl shadow p-10 text-gray-500">
-        Select a patient
-      </div>
-    )
-  }
-
-  return (
-    <ClinicalWorkspace
-      patient={patient}
-    />
-  )
-}
+import { lazy,Suspense,useEffect,useState } from 'react'
+import PatientOrthodonticSummary from '../orthodontics/PatientOrthodonticSummary'
+import { getOrthodonticCases } from '../../services/orthodontics.service'
+const ClinicalExperience=lazy(()=>import('../clinical/experience/ClinicalExperience')),PatientOverview=lazy(()=>import('./PatientOverview')),AppointmentHistory=lazy(()=>import('./AppointmentHistory')),DocumentsPanel=lazy(()=>import('./DocumentsPanel')),MedicalHistoryPanel=lazy(()=>import('./MedicalHistoryPanel')),CommunicationsPanel=lazy(()=>import('./CommunicationsPanel')),PatientTasksPanel=lazy(()=>import('./PatientTasksPanel'))
+const fallback=<div className="rounded-xl bg-white p-8 text-slate-500">Loading workspace…</div>
+export default function PatientWorkspace({patient,activeTab,clinicalTab,onClinicalTab}){const [orthoCase,setOrthoCase]=useState(null);useEffect(()=>{let active=true;if(!patient?.id){setOrthoCase(null);return}getOrthodonticCases({patient:patient.id}).then(c=>active&&setOrthoCase(c[0]||null)).catch(()=>active&&setOrthoCase(null));return()=>{active=false}},[patient?.id]);if(!patient)return <div className="rounded-xl bg-white p-10 text-center text-slate-500">Select a patient to open their workspace.</div>;let panel;if(activeTab==='clinical')panel=<ClinicalExperience patient={patient} orthoCase={orthoCase} activeTab={clinicalTab} onTabChange={onClinicalTab}/>;else if(activeTab==='orthodontics')panel=<PatientOrthodonticSummary orthoCase={orthoCase}/>;else if(activeTab==='documents')panel=<DocumentsPanel patient={patient}/>;else if(activeTab==='appointments')panel=<AppointmentHistory patient={patient}/>;else if(activeTab==='medical-history')panel=<MedicalHistoryPanel patient={patient}/>;else if(activeTab==='communications')panel=<CommunicationsPanel patient={patient}/>;else if(activeTab==='tasks')panel=<PatientTasksPanel patient={patient}/>;else panel=<PatientOverview patient={patient}/>;return <Suspense fallback={fallback}>{panel}</Suspense>}

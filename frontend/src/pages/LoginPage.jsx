@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import {useClinicSettings} from '../context/ClinicSettingsContext'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const { login } = useAuth()
+  const {settings}=useClinicSettings()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -42,9 +44,9 @@ export default function LoginPage() {
           boxShadow: '0 0 10px rgba(0,0,0,0.1)',
         }}
       >
-        <h1>BSDC EMR</h1>
+        {settings.logo_url&&<img src={settings.logo_url} alt="" style={{height:'72px',maxWidth:'180px',objectFit:'contain'}}/>}<h1>{settings.clinic_name}</h1>
 
-        <p>Dental Clinic Management System</p>
+        <p>{settings.tagline}</p>
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '15px' }}>

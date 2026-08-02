@@ -6,6 +6,8 @@ import api from '../api/axios'
 export async function getPatients({
   search = '',
   page = 1,
+  ordering = '-created_at',
+  is_active,
 } = {}) {
 
   try {
@@ -14,6 +16,8 @@ export async function getPatients({
       params: {
         search,
         page,
+        ordering,
+        ...(is_active === '' || is_active === undefined ? {} : { is_active }),
       },
     })
 
@@ -29,6 +33,19 @@ export async function getPatients({
     throw error
   }
 }
+
+export const getPatientSummary = async id => (await api.get(`/patients/${id}/summary/`)).data
+export const archivePatient = (id, reason) => api.post(`/patients/${id}/archive/`, { reason })
+export const reactivatePatient = id => api.post(`/patients/${id}/reactivate/`)
+export const getPatientDocuments = async params => (await api.get('/patient-documents/', { params })).data
+export const uploadPatientDocument = async payload => { const form=new FormData(); Object.entries(payload).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=='')form.append(k,v)}); return (await api.post('/patient-documents/',form)).data }
+export const archivePatientDocument = id => api.post(`/patient-documents/${id}/archive/`)
+export const fetchPatientDocument = (id, disposition='preview') => api.get(`/patient-documents/${id}/${disposition}/`, { responseType:'blob' })
+export const getPatientCommunications = async params => (await api.get('/patient-communications/', { params })).data
+export const createPatientCommunication = async data => (await api.post('/patient-communications/', data)).data
+export const getMedicalHistory = async patient => (await api.get('/patient-medical-history/', { params:{patient} })).data
+export const saveMedicalHistory = (id, data) => id ? api.patch(`/patient-medical-history/${id}/`, data) : api.post('/patient-medical-history/', data)
+export const getAllergies = async patient => (await api.get('/patient-allergies/', { params:{patient} })).data
 
 /**
  * Get Single Patient
@@ -61,30 +78,13 @@ export async function createPatient(data) {
 
   try {
 
-    const formData = new FormData()
-
-    Object.keys(data).forEach((key) => {
-
-      if (
-        data[key] !== null &&
-        data[key] !== undefined
-      ) {
-        formData.append(
-          key,
-          data[key]
-        )
-      }
-    })
+    const payload = Object.fromEntries(
+      Object.entries(data).filter(([, value]) => value !== '' && value !== null && value !== undefined)
+    )
 
     const response = await api.post(
       '/patients/',
-      formData,
-      {
-        headers: {
-          'Content-Type':
-            'multipart/form-data',
-        },
-      }
+      payload
     )
 
     return response.data
@@ -110,7 +110,7 @@ export async function updatePatient(
 
   try {
 
-    const response = await api.put(
+    const response = await api.patch(
       `/patients/${id}/`,
       data
     )

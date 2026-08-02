@@ -2,6 +2,7 @@ import uuid
 from datetime import date
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 
 def _upload_patient_photo(instance, filename):
@@ -168,6 +169,14 @@ class Patient(models.Model):
         )
 
 
+class PatientDailySequence(models.Model):
+    sequence_date = models.DateField(primary_key=True)
+    last_sequence = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = 'patient_daily_sequences'
+
+
 class MedicalHistory(models.Model):
     DIABETES_CHOICES = [('none', 'None'), ('type1', 'Type 1'), ('type2', 'Type 2'), ('pre', 'Pre-diabetic')]
     HEPATITIS_CHOICES = [('none', 'None'), ('A', 'A'), ('B', 'B'), ('C', 'C')]
@@ -298,11 +307,7 @@ class Allergy(models.Model):
 
 
 class PatientDocument(models.Model):
-    DOC_TYPE = [
-        ('xray', 'X-Ray'), ('photo', 'Clinical Photo'), ('consent', 'Consent Form'),
-        ('id', 'ID Document'), ('insurance', 'Insurance'), ('lab', 'Lab Report'),
-        ('referral', 'Referral'), ('prescription', 'Prescription'), ('other', 'Other'),
-    ]
+    DOC_TYPE = [('consent', 'Consent'), ('referral', 'Referral'), ('radiograph', 'Radiograph'), ('lab_report', 'Lab Report'), ('identification', 'Identification'), ('orthodontic', 'Orthodontic'), ('clinical', 'Clinical'), ('photograph', 'Photograph'), ('general', 'General'), ('other', 'Other')]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='documents')
@@ -316,6 +321,11 @@ class PatientDocument(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True
     )
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    version = models.PositiveSmallIntegerField(default=1)
+    is_archived = models.BooleanField(default=False, db_index=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    linked_module = models.CharField(max_length=40, blank=True)
+    linked_record_id = models.CharField(max_length=100, blank=True)
 
     class Meta:
         db_table = 'patient_documents'
@@ -331,5 +341,25 @@ class PatientDocument(models.Model):
             except Exception:
                 pass
         super().save(*args, **kwargs)
+
+
+class PatientCommunication(models.Model):
+    CHANNEL_CHOICES = [('phone', 'Phone call'), ('sms', 'SMS'), ('email', 'Email'), ('letter', 'Letter'), ('in_person', 'In-person discussion')]
+    DIRECTION_CHOICES = [('inbound', 'Inbound'), ('outbound', 'Outbound')]
+    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='communications')
+    channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, db_index=True)
+    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES)
+    subject = models.CharField(max_length=200)
+    summary = models.TextField()
+    outcome = models.CharField(max_length=255, blank=True)
+    follow_up_required = models.BooleanField(default=False)
+    linked_task = models.ForeignKey('tasks.Task', null=True, blank=True, on_delete=models.SET_NULL, related_name='communications')
+    staff_member = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='patient_communications')
+    occurred_at = models.DateTimeField(default=timezone.now, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'patient_communications'
+        ordering = ['-occurred_at']
 
 

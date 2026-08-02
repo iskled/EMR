@@ -1,13 +1,10 @@
-export default function ClinicalImageGallery() {
-  return (
-    <div className="bg-white rounded-2xl shadow p-6">
-      <h2 className="text-xl font-bold mb-4">
-        Clinical Images
-      </h2>
-
-      <p className="text-gray-500">
-        X-rays and clinical photos coming soon.
-      </p>
-    </div>
-  )
-}
+import { useCallback,useEffect,useState } from 'react'
+import { useAuth } from '../../auth/AuthContext'
+import { hasPermission } from '../../permissions/permissions'
+import { deleteClinicalImage,getClinicalImages,uploadClinicalImage } from '../../services/clinical.service'
+const types=['intraoral_photo','extraoral_photo','periapical','bitewing','panoramic','cbct','cephalometric','other']
+export default function ClinicalImageGallery({patient}){const {user}=useAuth()||{};const canWrite=hasPermission(user,'clinical.write');const [images,setImages]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[uploading,setUploading]=useState(false),[form,setForm]=useState({image_type:'intraoral_photo',tooth_number:'',caption:'',taken_at:new Date().toISOString().slice(0,10),image:null})
+ const load=useCallback(async()=>{setLoading(true);setError('');try{const r=await getClinicalImages(patient.id);setImages(r.data?.results||r.data||[])}catch{setError('Clinical images could not be loaded.')}finally{setLoading(false)}},[patient.id]);useEffect(()=>{load()},[load])
+ async function submit(e){e.preventDefault();if(!form.image)return;setUploading(true);setError('');try{await uploadClinicalImage({...form,patient:patient.id});setForm({...form,image:null,caption:'',tooth_number:''});await load()}catch{setError('Image upload failed.')}finally{setUploading(false)}}
+ async function remove(id){if(!window.confirm('Delete this clinical image?'))return;try{await deleteClinicalImage(id);await load()}catch{setError('Image deletion failed.')}}
+ return <section className="space-y-4">{canWrite&&<form onSubmit={submit} className="grid gap-3 rounded-xl bg-white p-4 shadow-sm md:grid-cols-5"><input aria-label="Clinical image" type="file" accept="image/*" onChange={e=>setForm({...form,image:e.target.files?.[0]||null})} className="text-sm md:col-span-2"/><select aria-label="Image category" value={form.image_type} onChange={e=>setForm({...form,image_type:e.target.value})} className="rounded border p-2 text-sm">{types.map(t=><option key={t} value={t}>{t.replaceAll('_',' ')}</option>)}</select><input aria-label="Tooth number" placeholder="Tooth" value={form.tooth_number} onChange={e=>setForm({...form,tooth_number:e.target.value})} className="rounded border p-2 text-sm"/><button disabled={uploading||!form.image} className="rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{uploading?'Uploading…':'Upload'}</button></form>}{error&&<div role="alert" className="rounded-xl bg-red-50 p-4 text-red-700">{error} <button onClick={load} className="underline">Retry</button></div>}{loading?<div className="rounded-xl bg-white p-8 text-slate-500">Loading images…</div>:images.length?<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{images.map(img=><article key={img.id} className="overflow-hidden rounded-xl bg-white shadow-sm"><img src={img.image_url||img.image} alt={img.caption||img.image_type} loading="lazy" className="h-48 w-full object-cover"/><div className="p-3"><p className="font-semibold capitalize">{img.image_type.replaceAll('_',' ')}</p><p className="text-xs text-slate-500">{img.taken_at}{img.tooth_number?` · Tooth ${img.tooth_number}`:''}</p>{canWrite&&<button type="button" onClick={()=>remove(img.id)} className="mt-2 text-xs font-semibold text-red-700">Delete</button>}</div></article>)}</div>:!error&&<div className="rounded-xl bg-white p-8 text-center text-slate-500">No clinical images recorded.</div>}</section>}

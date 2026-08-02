@@ -7,10 +7,10 @@ export default function DashboardLayout({ children }) {
     <div className="flex min-h-screen bg-gray-100">
       <Sidebar />
 
-      <div className="flex-1 flex flex-col">
+      <div className="min-w-0 flex-1 flex flex-col">
         <Topbar />
 
-        <main className="p-6">
+        <main className="overflow-x-hidden p-4 md:p-6">
           {children}
         </main>
       </div>

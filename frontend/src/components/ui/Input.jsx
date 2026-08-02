@@ -9,7 +9,7 @@ export default function Input({
 }) {
 
   const baseClasses =
-    'w-full border rounded-xl px-4 py-3 transition focus:outline-none focus:ring-2'
+    'w-full border rounded-xl px-4 py-3 text-base font-medium leading-relaxed text-gray-900 transition focus:outline-none focus:ring-2'
 
   const normalClasses =
     'border-gray-300 focus:ring-blue-500'
@@ -31,7 +31,7 @@ export default function Input({
     <div className="space-y-2">
 
       {label && (
-        <label className="block text-sm font-medium text-gray-700">
+        <label className="block text-base font-semibold text-gray-800">
           {label}
 
           {required && (

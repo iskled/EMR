@@ -13,6 +13,8 @@ router.register(r'clinical-templates', views.ClinicalTemplateViewSet, basename='
 # NEW
 router.register(r'orthodontic-cases', views.OrthodonticCaseViewSet, basename='orthodontic-case')
 router.register(r'orthodontic-visits', views.OrthodonticVisitViewSet, basename='orthodontic-visit')
+router.register(r'orthodontic-photos', views.OrthodonticPhotoViewSet, basename='orthodontic-photo')
+router.register(r'orthodontic-documents', views.OrthodonticDocumentViewSet, basename='orthodontic-document')
 
 urlpatterns = [
     path('', include(router.urls)),

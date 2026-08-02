@@ -10,6 +10,7 @@ from patients.utils import generate_patient_code
 
 
 class PatientWriteSerializer(serializers.ModelSerializer):
+    patient_code = serializers.CharField(read_only=True)
 
     class Meta:
         model = Patient
@@ -38,6 +39,14 @@ class PatientWriteSerializer(serializers.ModelSerializer):
             if not attrs.get(field):
                 errors[field] = 'This field is required.'
 
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        instance_pk = self.instance.pk if self.instance else None
+        for field in ('phone_primary', 'email'):
+            value = attrs.get(field)
+            if value and Patient.objects.filter(**{f'{field}__iexact': value}).exclude(pk=instance_pk).exists():
+                errors[field] = f'A patient with this {field.replace("_", " ")} already exists.'
         if errors:
             raise serializers.ValidationError(errors)
 

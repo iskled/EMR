@@ -39,7 +39,15 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [initializing, setInitializing] = useState(true)
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const refresh = localStorage.getItem('refreshToken')
+    if (refresh) {
+      try {
+        await api.post('/auth/logout/', { refresh })
+      } catch {
+        // Local logout must still complete if the refresh token is already invalid.
+      }
+    }
     clearStoredTokens()
     setUser(null)
   }, [])

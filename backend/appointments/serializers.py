@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 from rest_framework import serializers
+from django.db import transaction
 from .models import Appointment, AppointmentType, WaitingList
 
 
@@ -60,6 +61,7 @@ class AppointmentDetailSerializer(serializers.ModelSerializer):
 # ── Write serializer (create / update) ───────────────────────────────────────
 
 class AppointmentWriteSerializer(serializers.ModelSerializer):
+    reminder = serializers.UUIDField(write_only=True, required=False)
     class Meta:
         model = Appointment
         fields = [
@@ -67,6 +69,7 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
             'scheduled_date', 'start_time', 'end_time', 'duration_minutes',
             'status', 'chief_complaint', 'pre_appointment_notes',
             'treatment_notes', 'cancellation_reason',
+            'reminder',
         ]
 
     def validate_scheduled_date(self, value):
@@ -75,6 +78,21 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
+        reminder_id = data.get('reminder')
+        if reminder_id:
+            from clinical.models import RecallSchedule
+            try:
+                reminder = RecallSchedule.objects.select_related('linked_appointment').get(pk=reminder_id)
+            except RecallSchedule.DoesNotExist:
+                raise serializers.ValidationError({'reminder': 'Reminder not found.'})
+            if reminder.status == 'booked' and reminder.linked_appointment_id:
+                self._idempotent_appointment = reminder.linked_appointment
+                return data
+            if reminder.status != 'confirmed':
+                raise serializers.ValidationError({'reminder': 'Only a confirmed reminder can be booked.'})
+            patient = data.get('patient')
+            if patient and reminder.patient_id != patient.pk:
+                raise serializers.ValidationError({'patient': 'Appointment patient must match the reminder patient.'})
         # Resolve fields for partial updates
         def resolved(field, default=None):
             return data.get(field, getattr(self.instance, field, default))
@@ -118,8 +136,24 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
+        reminder_id = validated_data.pop('reminder', None)
+        if getattr(self, '_idempotent_appointment', None):
+            return self._idempotent_appointment
         validated_data['created_by'] = self.context['request'].user
-        return super().create(validated_data)
+        if not reminder_id:
+            return super().create(validated_data)
+        from clinical.models import RecallSchedule
+        from clinical.reminder_workflow import transition_reminder
+        with transaction.atomic():
+            reminder = RecallSchedule.objects.select_for_update().get(pk=reminder_id)
+            if reminder.status == 'booked' and reminder.linked_appointment_id:
+                return reminder.linked_appointment
+            if reminder.status != 'confirmed':
+                raise serializers.ValidationError({'reminder': 'Reminder is no longer confirmed.'})
+            appointment = super().create(validated_data)
+            transition_reminder(reminder, 'booked', self.context['request'].user,
+                                appointment=appointment, request=self.context['request'])
+            return appointment
 
 
 # ── Status-only update ────────────────────────────────────────────────────────

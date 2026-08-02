@@ -1,41 +1,38 @@
+import Button from '../ui/Button'
+
 export default function AppointmentToolbar({
-    onNew,
-    onRefresh,
-    search,
-    setSearch
+  onNew,
+  onRefresh,
+  loading = false,
+  lastUpdated,
 }) {
+  return (
+    <div className="flex flex-col gap-3 bg-white rounded-lg border border-gray-200 p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Appointments</h1>
+        <p className="text-sm text-gray-500">
+          Enterprise scheduling, availability, and waiting-list workflow
+        </p>
+      </div>
 
-    return (
-
-        <div className="bg-white rounded-xl shadow p-4 flex justify-between items-center">
-
-            <input
-                className="border rounded-lg px-3 py-2 w-80"
-                placeholder="Search patient..."
-                value={search}
-                onChange={(e)=>setSearch(e.target.value)}
-            />
-
-            <div className="flex gap-3">
-
-                <button
-                    onClick={onRefresh}
-                    className="bg-gray-200 px-4 py-2 rounded-lg"
-                >
-                    Refresh
-                </button>
-
-                <button
-                    onClick={onNew}
-                    className="bg-blue-600 text-white px-5 py-2 rounded-lg"
-                >
-                    New Appointment
-                </button>
-
-            </div>
-
-        </div>
-
-    )
-
+      <div className="flex flex-wrap items-center gap-3">
+        {lastUpdated && (
+          <span className="text-xs text-gray-500">
+            Updated {lastUpdated.toLocaleTimeString()}
+          </span>
+        )}
+        <Button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="bg-gray-700 hover:bg-gray-800 disabled:opacity-60"
+        >
+          {loading ? 'Refreshing...' : 'Refresh'}
+        </Button>
+        <Button type="button" onClick={onNew}>
+          New Appointment
+        </Button>
+      </div>
+    </div>
+  )
 }

@@ -1,147 +1,131 @@
-import { useMemo } from "react";
+import DayCalendar from './DayCalendar'
+import WeekCalendar from './WeekCalendar'
+import MonthCalendar from './MonthCalendar'
+import {
+  addDays,
+  addMonths,
+  formatLongDate,
+  formatMonthYear,
+  startOfWeek,
+} from './calendarUtils'
 
-const DAYS = [
-    "Sun",
-    "Mon",
-    "Tue",
-    "Wed",
-    "Thu",
-    "Fri",
-    "Sat"
-];
+const viewOptions = [
+  { value: 'day', label: 'Day' },
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+]
 
 export default function AppointmentCalendar({
-    appointments = [],
-    selectedDate,
-    onDateChange,
-    onAppointmentClick
+  appointments = [],
+  selectedDate,
+  view,
+  onViewChange,
+  onDateChange,
+  onAppointmentClick,
+  onSlotClick,
 }) {
+  const date = selectedDate || new Date()
 
-    const today = useMemo(() => new Date(), []);
-
-    const currentMonth = today.toLocaleString("default", {
-        month: "long"
-    });
-
-    const currentYear = today.getFullYear();
-
-    const days = Array.from({ length: 31 }, (_, i) => i + 1);
-
-    function appointmentsForDay(day) {
-
-        return appointments.filter(a => {
-
-            if (!a.scheduled_date) return false;
-
-            return Number(a.scheduled_date.split("-")[2]) === day;
-
-        });
-
+  function move(direction) {
+    if (view === 'day') {
+      onDateChange?.(addDays(date, direction))
+      return
     }
 
-    return (
+    if (view === 'week') {
+      onDateChange?.(addDays(date, direction * 7))
+      return
+    }
 
-        <div className="bg-white rounded-xl shadow">
+    onDateChange?.(addMonths(date, direction))
+  }
 
-            <div className="flex justify-between items-center border-b p-5">
+  function title() {
+    if (view === 'day') return formatLongDate(date)
+    if (view === 'week') {
+      const start = startOfWeek(date)
+      const end = addDays(start, 6)
+      return `${formatLongDate(start)} - ${formatLongDate(end)}`
+    }
+    return formatMonthYear(date)
+  }
 
-                <h2 className="text-xl font-semibold">
-
-                    {currentMonth} {currentYear}
-
-                </h2>
-
-                <button
-                    className="border rounded-lg px-4 py-2"
-                    onClick={() => onDateChange?.(today)}
-                >
-                    Today
-                </button>
-
-            </div>
-
-            <div className="grid grid-cols-7 border-b">
-
-                {DAYS.map(day => (
-
-                    <div
-                        key={day}
-                        className="text-center font-semibold py-3 bg-gray-50"
-                    >
-                        {day}
-                    </div>
-
-                ))}
-
-            </div>
-
-            <div className="grid grid-cols-7">
-
-                {days.map(day => {
-
-                    const dayAppointments = appointmentsForDay(day);
-
-                    return (
-
-                        <div
-                            key={day}
-                            className="
-                                min-h-[140px]
-                                border
-                                p-2
-                                hover:bg-blue-50
-                            "
-                        >
-
-                            <div className="font-semibold mb-2">
-
-                                {day}
-
-                            </div>
-
-                            <div className="space-y-1">
-
-                                {dayAppointments.map(appt => (
-
-                                    <button
-                                        key={appt.id}
-                                        onClick={() =>
-                                            onAppointmentClick?.(appt)
-                                        }
-                                        className="
-                                            w-full
-                                            text-left
-                                            text-xs
-                                            rounded
-                                            bg-blue-100
-                                            px-2
-                                            py-1
-                                            hover:bg-blue-200
-                                        "
-                                    >
-
-                                        {appt.start_time}
-
-                                        <br />
-
-                                        {appt.patient_name}
-
-                                    </button>
-
-                                ))}
-
-                            </div>
-
-                        </div>
-
-                    );
-
-                })}
-
-            </div>
-
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+      <div className="flex flex-col gap-4 border-b border-gray-200 p-4 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">{title()}</h2>
+          <p className="text-sm text-gray-500">
+            {appointments.length} appointment{appointments.length === 1 ? '' : 's'} in view
+          </p>
         </div>
 
-    );
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+            {viewOptions.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onViewChange?.(option.value)}
+                className={`rounded-md px-3 py-1.5 text-sm font-semibold ${
+                  view === option.value
+                    ? 'bg-white text-blue-700 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
 
+          <button
+            type="button"
+            onClick={() => move(-1)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => onDateChange?.(new Date())}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() => move(1)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+
+      {view === 'day' && (
+        <DayCalendar
+          date={date}
+          appointments={appointments}
+          onAppointmentClick={onAppointmentClick}
+          onSlotClick={onSlotClick}
+        />
+      )}
+      {view === 'week' && (
+        <WeekCalendar
+          date={date}
+          appointments={appointments}
+          onAppointmentClick={onAppointmentClick}
+          onSlotClick={onSlotClick}
+        />
+      )}
+      {view === 'month' && (
+        <MonthCalendar
+          date={date}
+          appointments={appointments}
+          onAppointmentClick={onAppointmentClick}
+          onSlotClick={onSlotClick}
+        />
+      )}
+    </div>
+  )
 }

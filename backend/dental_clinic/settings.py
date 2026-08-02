@@ -4,7 +4,7 @@ from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-me-in-production')
+SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
 
@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     # Third party
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
     # Local
@@ -26,12 +27,16 @@ INSTALLED_APPS = [
     'patients',
     'appointments',
     'clinical',
+    'inventory',
+    'reports',
+    'tasks',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'core.middleware.RequestCorrelationMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -67,7 +72,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': config('DB_NAME', default='dental_clinic'),
         'USER': config('DB_USER', default='root'),
-        'PASSWORD': config('DB_PASSWORD', default='Harriet@2023'),
+        'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST', default='localhost'),
         'PORT': config('DB_PORT', default='3306'),
         'OPTIONS': {
@@ -95,6 +100,15 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/min',
+        'user': '600/min',
+        'login': '10/min',
+    },
 }
 
 # ── JWT ──────────────────────────────────────────────────────────────────────
@@ -108,10 +122,15 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
 }
 
+SECURITY_LOGIN_MAX_FAILED_ATTEMPTS = config('SECURITY_LOGIN_MAX_FAILED_ATTEMPTS', default=5, cast=int)
+SECURITY_ACCOUNT_LOCKOUT_MINUTES = config('SECURITY_ACCOUNT_LOCKOUT_MINUTES', default=15, cast=int)
+SECURITY_PASSWORD_HISTORY_COUNT = config('SECURITY_PASSWORD_HISTORY_COUNT', default=5, cast=int)
+SECURITY_SESSION_TIMEOUT_MINUTES = config('SECURITY_SESSION_TIMEOUT_MINUTES', default=480, cast=int)
+
 # ── CORS ─────────────────────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000'
+    default='http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173'
 ).split(',')
 CORS_ALLOW_CREDENTIALS = True
 
@@ -125,6 +144,10 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # ── File Upload ──────────────────────────────────────────────────────────────
 FILE_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024   # 20 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024
+PATIENT_DOCUMENT_MAX_SIZE = config('PATIENT_DOCUMENT_MAX_SIZE', default=10 * 1024 * 1024, cast=int)
+DEFAULT_CURRENCY = config('DEFAULT_CURRENCY', default='NGN')
+DEFAULT_CURRENCY_SYMBOL = config('DEFAULT_CURRENCY_SYMBOL', default='₦')
+DEFAULT_LOCALE = config('DEFAULT_LOCALE', default='en-NG')
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOGGING = {
