@@ -1,4 +1,4 @@
-export default function TaskAlerts({ alerts, onAction }) {
+export default function TaskAlerts({ alerts, onAction, canClear = false }) {
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
       <h2 className="text-lg font-semibold text-gray-900">Task alerts</h2>
@@ -13,7 +13,7 @@ export default function TaskAlerts({ alerts, onAction }) {
             {alert.status === 'open' && (
               <div className="flex gap-2">
                 <button type="button" onClick={() => onAction(alert, 'acknowledge')} className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700">Acknowledge</button>
-                <button type="button" onClick={() => onAction(alert, 'dismiss')} className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700">Dismiss</button>
+                {canClear && <button type="button" onClick={() => onAction(alert, 'dismiss')} aria-label={`Clear alert for ${alert.task_title}`} className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Clear alert</button>}
               </div>
             )}
           </div>

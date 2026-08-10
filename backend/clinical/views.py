@@ -290,9 +290,27 @@ class ClinicalNoteViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 'tooth_number': n.tooth_numbers,
                 'meta': {
                     'dentist': n.dentist.get_full_name() if n.dentist else '',
+                    'other_dentist_name': n.other_dentist_name,
                     'is_signed': n.is_signed,
                     'note_type': n.note_type,
                     'treatment_scope': n.treatment_scope,
+                    'chief_complaint': n.chief_complaint,
+                    'medical_dental_history': n.medical_dental_history,
+                    'family_social_history': n.family_social_history,
+                    'general_examination': n.general_examination,
+                    'orofacial_examination': n.orofacial_examination,
+                    'clinical_findings': n.clinical_findings,
+                    'diagnosis': n.diagnosis,
+                    'treatment_planned': n.treatment_planned,
+                    'treatment_performed': n.treatment_performed,
+                    'materials_used': n.materials_used,
+                    'anesthesia_given': n.anesthesia_given,
+                    'anesthesia_type': n.anesthesia_type,
+                    'next_visit_instructions': n.next_visit_instructions,
+                    'notes': n.notes,
+                    'created_at': n.created_at.isoformat(),
+                    'updated_at': n.updated_at.isoformat(),
+                    'signed_at': n.signed_at.isoformat() if n.signed_at else '',
                 },
             })
 
@@ -396,12 +414,20 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
                         'contacted_by_name': request.user.get_full_name() or request.user.email,
                         'method': request.data.get('method', 'phone'),
                         'outcome': request.data.get('outcome', ''), 'notes': request.data.get('notes', '')})
+        old_status = reminder.status
         reminder.contact_history, reminder.contacted_at, reminder.contacted_by = history, now, request.user
-        if reminder.status == 'active':
+        outcome = str(request.data.get('outcome', '')).strip().lower()
+        if outcome == 'confirmed' and reminder.status in ('active', 'contacted', 'confirmed'):
+            reminder.status, reminder.confirmed_at = 'confirmed', now
+        elif reminder.status == 'active':
             reminder.status = 'contacted'
-        reminder.save(update_fields=['contact_history','contacted_at','contacted_by','status','updated_at'])
+        reminder.save(update_fields=['contact_history','contacted_at','contacted_by','status','confirmed_at','updated_at'])
         audit_event('reminder_contacted', 'RecallSchedule', reminder.pk, request=request,
-                    patient_id=reminder.patient_id, source_module='clinical')
+                    patient_id=reminder.patient_id,
+                    previous_values={'status': old_status},
+                    new_values={'status': reminder.status, 'method': request.data.get('method', 'phone'),
+                                'outcome': outcome, 'notes': request.data.get('notes', '')},
+                    source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     @action(detail=True, methods=['post'])
@@ -426,12 +452,14 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
         reminder.save(update_fields=['due_date','reschedule_history','rescheduled_at','rescheduled_by','reschedule_reason','updated_at'])
         audit_event('reminder_rescheduled', 'RecallSchedule', reminder.pk, request=request,
                     patient_id=reminder.patient_id, previous_values={'due_date': str(old_date)},
-                    new_values={'due_date': str(new_date)}, source_module='clinical')
+                    new_values={'due_date': str(new_date), 'reason': reason,
+                                'notes': request.data.get('notes', '')}, source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         reminder = self.get_object()
+        old_status = reminder.status
         reason = str(request.data.get('reason', '')).strip()
         if reminder.status not in ('active','contacted','confirmed') or not reason:
             return Response({'reason': 'A reason is required for an unresolved reminder.'}, status=400)
@@ -439,7 +467,8 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
         reminder.cancellation_reason = reason[:255]
         reminder.save(update_fields=['status','cancelled_at','cancelled_by','cancellation_reason','updated_at'])
         audit_event('reminder_cancelled', 'RecallSchedule', reminder.pk, request=request,
-                    patient_id=reminder.patient_id, source_module='clinical')
+                    patient_id=reminder.patient_id, previous_values={'status': old_status},
+                    new_values={'status': 'cancelled', 'reason': reason}, source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     @action(detail=True, methods=['post'], url_path='cancel-booking')
@@ -454,7 +483,17 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
             appointment = reminder.linked_appointment
             appointment.status, appointment.cancellation_reason = 'cancelled', reason
             appointment.save(update_fields=['status','cancellation_reason','updated_at'])
-            transition_reminder(reminder, 'confirmed', request.user, request=request)
+            old_status = reminder.status
+            reminder.status = 'cancelled'
+            reminder.cancelled_at = timezone.now()
+            reminder.cancelled_by = request.user
+            reminder.cancellation_reason = reason[:255]
+            reminder.save(update_fields=['status','cancelled_at','cancelled_by','cancellation_reason','updated_at'])
+            audit_event('reminder_cancelled', 'RecallSchedule', reminder.pk, request=request,
+                        patient_id=reminder.patient_id,
+                        previous_values={'status': old_status},
+                        new_values={'status': 'cancelled', 'reason': reason,
+                                    'appointment': str(appointment.pk)}, source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     @action(detail=True, methods=['post'], url_path='restore-cancelled')
@@ -462,10 +501,14 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
         reminder = self.get_object()
         if reminder.status != 'cancelled':
             return Response({'detail': 'Only a cancelled reminder can be restored.'}, status=400)
+        old_status = reminder.status
         reminder.status = 'active'
-        reminder.save(update_fields=['status', 'updated_at'])
+        reminder.restored_at = timezone.now()
+        reminder.restored_by = request.user
+        reminder.save(update_fields=['status', 'restored_at', 'restored_by', 'updated_at'])
         audit_event('reminder_cancelled_restored', 'RecallSchedule', reminder.pk, request=request,
-                    patient_id=reminder.patient_id, source_module='clinical')
+                    patient_id=reminder.patient_id, previous_values={'status': old_status},
+                    new_values={'status': 'active'}, source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     @action(detail=True, methods=['post'])
@@ -508,7 +551,10 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
         reminder.archived_reason = str(request.data.get('reason', ''))[:255]
         reminder.save(update_fields=['archived_at', 'archived_by', 'archived_reason', 'updated_at'])
         audit_event('reminder_archived', 'RecallSchedule', reminder.pk, request=request,
-                    patient_id=reminder.patient_id, source_module='clinical')
+                    patient_id=reminder.patient_id,
+                    previous_values={'status': reminder.status, 'archived': False},
+                    new_values={'status': reminder.status, 'archived': True,
+                                'reason': reminder.archived_reason}, source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     @action(detail=True, methods=['post'])
@@ -518,13 +564,16 @@ class RecallScheduleViewSet(AuditLogMixin, viewsets.ModelViewSet):
         reminder = RecallSchedule.objects.filter(pk=pk, archived_at__isnull=False).first()
         if not reminder:
             return Response({'detail': 'Archived reminder not found.'}, status=404)
+        old_status = reminder.status
         reminder.archived_at = reminder.archived_by = None
         reminder.archived_reason = ''
+        reminder.status = 'active'
         reminder.restored_at = timezone.now()
         reminder.restored_by = request.user
-        reminder.save(update_fields=['archived_at', 'archived_by', 'archived_reason', 'restored_at', 'restored_by', 'updated_at'])
+        reminder.save(update_fields=['archived_at', 'archived_by', 'archived_reason', 'status', 'restored_at', 'restored_by', 'updated_at'])
         audit_event('reminder_restored', 'RecallSchedule', reminder.pk, request=request,
-                    patient_id=reminder.patient_id, source_module='clinical')
+                    patient_id=reminder.patient_id, previous_values={'status': old_status, 'archived': True},
+                    new_values={'status': 'active', 'archived': False}, source_module='clinical')
         return Response(self.get_serializer(reminder).data)
 
     def destroy(self, request, *args, **kwargs):

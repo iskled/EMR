@@ -52,6 +52,15 @@ export const updateAppointmentStatus = async (id, status, payload = {}) => {
   return response.data
 }
 
+export const archiveAppointment = async (id, reason = '') => {
+  const response = await api.post(`/appointments/${id}/archive/`, { reason })
+  return response.data
+}
+
+export const deleteAppointment = async id => {
+  await api.delete(`/appointments/${id}/`, { data: { confirmation: 'DELETE' } })
+}
+
 export const getReminders = async params => (await api.get('/recalls/', { params })).data
 export const updateReminder = async (id, payload) => (await api.patch(`/recalls/${id}/`, payload)).data
 export const transitionReminder = async (id, payload) => (await api.post(`/recalls/${id}/transition/`, payload)).data

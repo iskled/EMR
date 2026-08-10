@@ -1,3 +1,4 @@
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -181,7 +182,15 @@ class StockMovement(models.Model):
     balance_before = models.DecimalField(max_digits=12, decimal_places=2)
     balance_after = models.DecimalField(max_digits=12, decimal_places=2)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name='+')
-    patient_id = models.UUIDField(null=True, blank=True, db_index=True)
+    patient = models.ForeignKey(
+        'patients.Patient',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='inventory_movements',
+        db_column='patient_id',
+        db_index=True,
+    )
     appointment_id = models.UUIDField(null=True, blank=True, db_index=True)
     clinical_note_id = models.UUIDField(null=True, blank=True, db_index=True)
     orthodontic_visit_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
@@ -196,6 +205,7 @@ class StockMovement(models.Model):
             models.Index(fields=['item', 'batch']),
             models.Index(fields=['created_at']),
             models.Index(fields=['movement_type']),
+            models.Index(fields=['patient', 'created_at']),
         ]
 
 
@@ -283,6 +293,84 @@ class InventoryAlert(models.Model):
         ]
 
 
+def inventory_identifier_prefix(for_date=None):
+    identifier_date = for_date or timezone.localdate()
+    return f'SKU{identifier_date:%y%m%d}-'
+
+
+def _sequence_number(value, prefix):
+    if not value or not value.startswith(prefix):
+        return 0
+    suffix = value[len(prefix):]
+    return int(suffix) if suffix.isdigit() else 0
+
+
+def next_inventory_identifier(for_date=None):
+    prefix = inventory_identifier_prefix(for_date)
+    item_numbers = (
+        _sequence_number(value, prefix)
+        for value in InventoryItem.objects.filter(sku__startswith=prefix).values_list('sku', flat=True)
+    )
+    batch_numbers = (
+        _sequence_number(value, prefix)
+        for value in InventoryBatch.objects.filter(batch_number__startswith=prefix).values_list('batch_number', flat=True)
+    )
+    return f'{prefix}{max([0, *item_numbers, *batch_numbers]) + 1}'
+
+
+def _tokens(value):
+    tokens = re.findall(r'[A-Za-z0-9]+', value or '')
+    if not tokens:
+        raise ValidationError('Inventory SKU generation requires category and supplier names.')
+    return tokens
+
+
+def _pad_code(code, tokens):
+    compact = ''.join(tokens)
+    if len(code) < 3:
+        code = f'{code}{compact[len(code):3]}'
+    return code[:3].upper()
+
+
+def _category_code(value):
+    tokens = _tokens(value)
+    if len(tokens) == 1:
+        code = tokens[0][:3]
+    elif len(tokens) == 2:
+        code = f'{tokens[0][:1]}{tokens[1][:2]}'
+    else:
+        code = ''.join(token[:1] for token in tokens[:3])
+    return _pad_code(code, tokens)
+
+
+def _supplier_code(value):
+    tokens = _tokens(value)
+    if len(tokens) == 1:
+        code = tokens[0][:3]
+    elif len(tokens) == 2:
+        code = f'{tokens[0][:2]}{tokens[1][:1]}'
+    else:
+        code = ''.join(token[:1] for token in tokens[:3])
+    return _pad_code(code, tokens)
+
+
+def inventory_item_sku_prefix(category, supplier, for_date=None):
+    identifier_date = for_date or timezone.localdate()
+    return f'{_category_code(category.name)}{_supplier_code(supplier.name)}{identifier_date:%y%m%d}'
+
+
+def next_inventory_item_sku(category, supplier, for_date=None):
+    if not category or not supplier:
+        raise ValidationError('Category and default supplier are required to generate an inventory SKU.')
+    prefix = inventory_item_sku_prefix(category, supplier, for_date)
+    numbers = (
+        int(value[len(prefix):])
+        for value in InventoryItem.objects.filter(sku__startswith=prefix).values_list('sku', flat=True)
+        if value[len(prefix):].isdigit()
+    )
+    return f'{prefix}{max([0, *numbers]) + 1}'
+
+
 def create_movement(*, item, batch, location, movement_type, quantity, balance_before, balance_after, user, notes='', **source):
     return StockMovement.objects.create(
         item=item,
@@ -329,6 +417,8 @@ def receive_stock(*, item, batch_number, quantity, user, supplier=None, location
     quantity = Decimal(str(quantity))
     if quantity <= 0:
         raise ValidationError('Quantity received must be positive.')
+    if not batch_number:
+        batch_number = next_inventory_identifier()
     batch, created = InventoryBatch.objects.select_for_update().get_or_create(
         item=item,
         batch_number=batch_number,
@@ -380,6 +470,9 @@ def issue_stock(*, item, quantity, user, batch=None, location=None, notes='', **
     if location:
         qs = qs.filter(storage_location=location)
     qs = qs.order_by('expiry_date', 'created_at')
+    available = sum((current.quantity_remaining for current in qs), Decimal('0'))
+    if available < quantity and not item.allow_negative_stock:
+        raise ValidationError(f'Insufficient stock for {item.name}. Available: {available}, requested: {quantity}.')
     remaining = quantity
     touched = []
     for current in qs:

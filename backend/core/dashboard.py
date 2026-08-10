@@ -143,7 +143,7 @@ def dashboard_payload(user):
     start_month = today.replace(day=1)
     data = {
         'generated_at': timezone.now(), 'date': today, 'role': user.role,
-        'capabilities': {key: has_permission(user, key) for key in ['patients.write', 'appointments.write', 'clinical.view', 'clinical.write', 'orthodontics.view', 'inventory.view', 'inventory.usage', 'tasks.view', 'tasks.create', 'tasks.write', 'tasks.assign', 'reports.view', 'users.manage', 'security.view', 'audit.view']},
+        'capabilities': {key: has_permission(user, key) for key in ['patients.write', 'appointments.write', 'clinical.view', 'clinical.write', 'orthodontics.view', 'inventory.view', 'inventory.usage', 'tasks.view', 'tasks.create', 'tasks.write', 'tasks.assign', 'reports.view', 'users.manage', 'dentists.manage', 'security.view', 'audit.view']},
         'appointments': appointments,
         'metrics': {'appointments_today': appointments['total'], **appointments['statuses']},
         'tasks': _safe_section('tasks', lambda: _tasks(user, today), errors, {'open': 0, 'my': 0, 'team': 0, 'due_today': 0, 'due_week': 0, 'overdue': 0, 'urgent': 0, 'blocked': 0, 'unassigned': 0, 'incomplete_checklists': 0, 'items': []}),

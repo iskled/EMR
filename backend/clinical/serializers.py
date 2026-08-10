@@ -208,6 +208,13 @@ class TreatmentPlanDetailSerializer(serializers.ModelSerializer):
 
 
 class TreatmentPlanWriteSerializer(serializers.ModelSerializer):
+    def validate_dentist(self, value):
+        if value.role != 'dentist':
+            raise serializers.ValidationError('Select an eligible dentist.')
+        if not value.is_active and (not self.instance or value.pk != self.instance.dentist_id):
+            raise serializers.ValidationError('Inactive dentists cannot be selected for a new treatment plan.')
+        return value
+
     class Meta:
         model = TreatmentPlan
         fields = [
@@ -295,6 +302,15 @@ class ClinicalNoteDetailSerializer(serializers.ModelSerializer):
 
 
 class ClinicalNoteWriteSerializer(serializers.ModelSerializer):
+    treatment_scope = serializers.ChoiceField(
+        choices=[
+            ('specific_teeth', 'Specific teeth'),
+            ('whole_mouth', 'Whole mouth'),
+            ('general', 'General'),
+        ],
+        required=False,
+    )
+
     def validate(self, attrs):
         dentist = attrs.get('dentist', getattr(self.instance, 'dentist', None))
         other = (attrs.get('other_dentist_name', getattr(self.instance, 'other_dentist_name', '')) or '').strip()
@@ -307,6 +323,9 @@ class ClinicalNoteWriteSerializer(serializers.ModelSerializer):
         else:
             attrs['other_dentist_name'] = other
         scope = attrs.get('treatment_scope', getattr(self.instance, 'treatment_scope', 'specific_teeth'))
+        if scope == 'general':
+            scope = 'whole_mouth'
+            attrs['treatment_scope'] = scope
         teeth = attrs.get('tooth_numbers', getattr(self.instance, 'tooth_numbers', []))
         if scope == 'whole_mouth':
             attrs['tooth_numbers'] = []
@@ -493,6 +512,13 @@ class OrthodonticDocumentSerializer(serializers.ModelSerializer):
 class OrthodonticVisitSerializer(serializers.ModelSerializer):
     dentist_name = serializers.SerializerMethodField()
     photos = OrthodonticPhotoSerializer(many=True, read_only=True)
+
+    def validate_dentist(self, value):
+        if value and value.role != 'dentist':
+            raise serializers.ValidationError('Select an eligible dentist.')
+        if value and not value.is_active and (not self.instance or value.pk != self.instance.dentist_id):
+            raise serializers.ValidationError('Inactive dentists cannot be selected for a new orthodontic visit.')
+        return value
 
     class Meta:
         model = OrthodonticVisit

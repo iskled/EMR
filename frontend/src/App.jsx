@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import ProtectedRoute from './routes/ProtectedRoute'
@@ -18,11 +19,21 @@ import UserManagementPage from './pages/UserManagementPage'
 import ClinicBrandingPage from './pages/ClinicBrandingPage'
 import ArchivedRemindersPage from './pages/ArchivedRemindersPage'
 
+const DentistAccountsPage = lazy(() => import('./pages/DentistAccountsPage'))
+
 function protectedPage(page, permission) {
   return (
     <ProtectedRoute permission={permission}>
       {page}
     </ProtectedRoute>
+  )
+}
+
+function lazyPage(page) {
+  return (
+    <Suspense fallback={<div className="rounded-lg border border-gray-200 bg-white p-8 text-gray-500">Loading...</div>}>
+      {page}
+    </Suspense>
   )
 }
 
@@ -44,6 +55,8 @@ export default function App() {
       <Route path="/administration/users" element={protectedPage(<UserManagementPage />, 'users.manage')} />
       <Route path="/administration/branding" element={protectedPage(<ClinicBrandingPage />, 'users.manage')} />
       <Route path="/administration/archived-reminders" element={protectedPage(<ArchivedRemindersPage />, 'users.manage')} />
+      <Route path="/staff/dentists" element={protectedPage(lazyPage(<DentistAccountsPage />), 'dentists.manage')} />
+      <Route path="/administration/dentists" element={protectedPage(lazyPage(<DentistAccountsPage />), 'dentists.manage')} />
       <Route path="/settings" element={protectedPage(<SettingsPage />, 'settings.view')} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

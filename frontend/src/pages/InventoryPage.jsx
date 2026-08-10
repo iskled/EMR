@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '../auth/AuthContext'
 import Button from '../components/ui/Button'
 import InventoryDashboard from '../components/inventory/InventoryDashboard'
 import InventoryFilters from '../components/inventory/InventoryFilters'
@@ -25,11 +26,17 @@ import {
   getStockMovements,
   getSuppliers,
 } from '../services/inventory.service'
+import { hasPermission } from '../permissions/permissions'
 
-const initialFilters = { search: '', category: '', item_type: '', storage_location: '', is_active: '' }
+const initialFilters = { search: '', category: '', storage_location: '', is_active: '' }
 const tabs = ['Dashboard', 'Items', 'Suppliers', 'Batches', 'Purchase Orders', 'Alerts', 'Movements']
 
 export default function InventoryPage() {
+  const { user } = useAuth() || {}
+  const canCreate = hasPermission(user, 'inventory.create')
+  const canReceive = hasPermission(user, 'inventory.receive')
+  const canUse = hasPermission(user, 'inventory.usage')
+  const canAdjust = hasPermission(user, 'inventory.adjust_decrease')
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [filters, setFilters] = useState(initialFilters)
   const [dashboard, setDashboard] = useState(null)
@@ -119,8 +126,8 @@ export default function InventoryPage() {
           <p className="text-sm text-gray-500">Dental stock control, batches, expiry, purchase orders, alerts, and movement history.</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Button type="button" onClick={() => openModal('item')}>New Item</Button>
-          <Button type="button" onClick={() => setPoModal(true)} className="bg-emerald-700 hover:bg-emerald-800">New PO</Button>
+          {canCreate && <Button type="button" onClick={() => openModal('item')}>New Item</Button>}
+          {canReceive && <Button type="button" onClick={() => setPoModal(true)} className="bg-emerald-700 hover:bg-emerald-800">New PO</Button>}
           <Button type="button" onClick={refreshAll} className="bg-gray-700 hover:bg-gray-800">Refresh</Button>
         </div>
       </div>
@@ -136,21 +143,33 @@ export default function InventoryPage() {
       {activeTab === 'Items' && (
         <div className="space-y-4">
           <InventoryFilters filters={filters} categories={categories} locations={locations} onChange={setFilters} onReset={() => setFilters(initialFilters)} />
-          <InventoryTable items={items} loading={loading} error={error} onEdit={item => openModal('item', item)} onReceive={item => openModal('receipt', item)} onUse={item => openModal('usage', item)} onAdjust={item => openModal('adjust', item)} />
+          <InventoryTable
+            items={items}
+            loading={loading}
+            error={error}
+            onEdit={item => openModal('item', item)}
+            onReceive={item => openModal('receipt', item)}
+            onUse={item => openModal('usage', item)}
+            onAdjust={item => openModal('adjust', item)}
+            canEdit={canCreate}
+            canReceive={canReceive}
+            canUse={canUse}
+            canAdjust={canAdjust}
+          />
         </div>
       )}
 
       {activeTab === 'Suppliers' && <SupplierPanel suppliers={suppliers} categories={categories} locations={locations} onChanged={refreshAll} />}
       {activeTab === 'Batches' && <div className="space-y-4"><BatchPanel batches={batches} /><ExpiryReportPanel batches={batches} /></div>}
-      {activeTab === 'Purchase Orders' && <PurchaseOrderPanel orders={orders} onNew={() => setPoModal(true)} onChanged={refreshAll} />}
+      {activeTab === 'Purchase Orders' && <PurchaseOrderPanel orders={orders} onNew={canReceive ? () => setPoModal(true) : null} onChanged={refreshAll} canReceive={canReceive} />}
       {activeTab === 'Alerts' && <InventoryAlerts alerts={alerts} onChanged={refreshAll} />}
       {activeTab === 'Movements' && <StockMovementTimeline movements={movements} />}
 
-      <InventoryItemModal open={itemModal} item={selectedItem} categories={categories} suppliers={suppliers} locations={locations} onClose={() => setItemModal(false)} onSaved={refreshAll} />
-      <StockReceiptModal open={receiptModal} item={selectedItem} suppliers={suppliers} locations={locations} onClose={() => setReceiptModal(false)} onSaved={refreshAll} />
-      <StockUsageModal open={usageModal} item={selectedItem} batches={batches} onClose={() => setUsageModal(false)} onSaved={refreshAll} />
-      <StockAdjustmentModal open={adjustModal} item={selectedItem} batches={batches} locations={locations} onClose={() => setAdjustModal(false)} onSaved={refreshAll} />
-      <PurchaseOrderModal open={poModal} suppliers={suppliers} items={items} onClose={() => setPoModal(false)} onSaved={refreshAll} />
+      {canCreate && <InventoryItemModal open={itemModal} item={selectedItem} categories={categories} suppliers={suppliers} locations={locations} onClose={() => setItemModal(false)} onSaved={refreshAll} />}
+      {canReceive && <StockReceiptModal open={receiptModal} item={selectedItem} suppliers={suppliers} locations={locations} onClose={() => setReceiptModal(false)} onSaved={refreshAll} />}
+      {canUse && <StockUsageModal open={usageModal} item={selectedItem} batches={batches} onClose={() => setUsageModal(false)} onSaved={refreshAll} />}
+      {canAdjust && <StockAdjustmentModal open={adjustModal} item={selectedItem} batches={batches} locations={locations} onClose={() => setAdjustModal(false)} onSaved={refreshAll} />}
+      {canReceive && <PurchaseOrderModal open={poModal} suppliers={suppliers} items={items} onClose={() => setPoModal(false)} onSaved={refreshAll} />}
     </div>
   )
 }

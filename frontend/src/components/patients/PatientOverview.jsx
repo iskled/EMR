@@ -8,7 +8,7 @@ const Card = ({ title, children }) => (
     <div className="mt-2 text-sm text-slate-800">{children}</div>
   </article>
 );
-export default function PatientOverview({ patient }) {
+export default function PatientOverview({ patient, refreshKey = 0 }) {
   const [data, setData] = useState(null),
     [error, setError] = useState(false);
   useEffect(() => {
@@ -20,7 +20,7 @@ export default function PatientOverview({ patient }) {
     return () => {
       active = false;
     };
-  }, [patient.id]);
+  }, [patient.id, refreshKey]);
   if (error)
     return (
       <div role="alert" className="rounded-xl bg-red-50 p-5 text-red-700">
@@ -115,6 +115,22 @@ export default function PatientOverview({ patient }) {
       </Card>
       <Card title="Current medications">
         {data.current_medications || "None recorded"}
+      </Card>
+      <Card title="Inventory usage">
+        {data.recent_inventory_usage?.length ? (
+          <div className="space-y-2">
+            {data.recent_inventory_usage.slice(0, 3).map((movement) => (
+              <div key={movement.id}>
+                <p className="font-semibold">{movement.item_name} x {movement.quantity} {movement.unit}</p>
+                <p className="text-xs text-slate-500">
+                  {new Date(movement.date).toLocaleDateString()} - {movement.recorded_by || "Recorded user"}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          "No inventory usage recorded."
+        )}
       </Card>
     </div>
   );

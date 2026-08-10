@@ -112,16 +112,14 @@ class PatientViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 'results': [],
             })
 
-        patients = (
-            self.get_queryset()
-            .filter(
-                Q(first_name__icontains=query)
-                | Q(last_name__icontains=query)
-                | Q(patient_code__icontains=query)
-                | Q(phone_primary__icontains=query)
-            )
-            .filter(is_active=True)[:15]
-        )
+        match = (Q(first_name__icontains=query) | Q(last_name__icontains=query)
+                 | Q(patient_code__icontains=query) | Q(phone_primary__icontains=query)
+                 | Q(phone_secondary__icontains=query))
+        words = query.split()
+        if len(words) > 1:
+            match |= (Q(first_name__icontains=words[0], last_name__icontains=words[-1])
+                      | Q(first_name__icontains=words[-1], last_name__icontains=words[0]))
+        patients = self.get_queryset().filter(match, is_active=True)[:15]
 
         serializer = PatientListSerializer(
             patients,
@@ -136,6 +134,7 @@ class PatientViewSet(AuditLogMixin, viewsets.ModelViewSet):
     def summary(self, request, pk=None):
         from appointments.models import Appointment
         from clinical.models import ClinicalImage, ClinicalNote, OrthodonticCase, RecallSchedule
+        from inventory.models import StockMovement
         from tasks.models import Task
         patient = self.get_object()
         appointments = Appointment.objects.filter(patient=patient).select_related('dentist', 'appointment_type')
@@ -149,6 +148,10 @@ class PatientViewSet(AuditLogMixin, viewsets.ModelViewSet):
         last_recall = RecallSchedule.objects.filter(patient=patient, status='completed').order_by('-completed_at').first()
         ortho = OrthodonticCase.objects.filter(patient=patient).exclude(status='archived').order_by('-created_at').first()
         clinical_allowed = request.user.role in ('admin', 'dentist', 'assistant')
+        inventory_usage = StockMovement.objects.filter(
+            patient=patient,
+            movement_type='usage',
+        ).select_related('item', 'user').order_by('-created_at')[:10]
         def appointment_data(item):
             if not item: return None
             return {'id': str(item.pk), 'date': item.scheduled_date, 'time': item.start_time, 'status': item.status, 'type': item.appointment_type.name, 'dentist': item.dentist.get_full_name() or item.dentist.email, 'reason': item.chief_complaint if clinical_allowed else ''}
@@ -163,6 +166,19 @@ class PatientViewSet(AuditLogMixin, viewsets.ModelViewSet):
             'open_tasks': Task.objects.filter(patient=patient, status__in=Task.OPEN_STATUSES).count(),
             'allergies': list(patient.allergies.values('id', 'substance', 'reaction', 'severity')),
             'current_medications': getattr(getattr(patient, 'medical_history', None), 'current_medications', '') if clinical_allowed else '',
+            'recent_inventory_usage': [
+                {
+                    'id': movement.pk,
+                    'date': movement.created_at,
+                    'item_name': movement.item.name,
+                    'item_sku': movement.item.sku,
+                    'quantity': str(abs(movement.quantity)),
+                    'unit': movement.item.unit_of_measure,
+                    'recorded_by': movement.user.get_full_name() or movement.user.email if movement.user else '',
+                    'notes': movement.notes,
+                }
+                for movement in inventory_usage
+            ],
         })
 
     @action(detail=True, methods=['post'])

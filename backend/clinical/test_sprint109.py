@@ -5,7 +5,7 @@ from rest_framework.test import APITestCase
 from authentication.models import User
 from core.models import AuditEvent
 from patients.models import Patient
-from clinical.models import OrthodonticCase, OrthodonticVisit, RecallSchedule, ToothChart, ToothRecord
+from clinical.models import ClinicalNote, OrthodonticCase, OrthodonticVisit, RecallSchedule, ToothChart, ToothRecord
 
 
 class Sprint109ClinicalTests(APITestCase):
@@ -48,6 +48,52 @@ class Sprint109ClinicalTests(APITestCase):
         historical = self.client.get(f'/api/clinical-notes/{note.pk}/')
         self.assertEqual(historical.status_code, 200)
         self.assertEqual(historical.data['dentist'], self.inactive.pk)
+
+    def test_new_general_note_accepts_legacy_general_treatment_scope(self):
+        response = self.client.post('/api/clinical-notes/', {
+            'patient': str(self.patient.pk),
+            'dentist': self.dentist.pk,
+            'note_type': 'general',
+            'note_date': date.today(),
+            'treatment_scope': 'general',
+            'chief_complaint': 'Check my teeth',
+            'clinical_findings': 'Oral hygiene is fair.',
+            'diagnosis': 'Acute gingivitis',
+            'treatment_performed': 'Scaling and polishing',
+        }, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['note_type'], 'general')
+        self.assertEqual(response.data['treatment_scope'], 'whole_mouth')
+
+    def test_timeline_includes_full_clinical_note_details(self):
+        note = ClinicalNote.objects.create(
+            patient=self.patient,
+            dentist=self.dentist,
+            note_type='treatment',
+            note_date=date.today(),
+            chief_complaint='Feeling pain in the gum',
+            clinical_findings='Inflamed gingiva with plaque deposits',
+            diagnosis='Acute gingivitis',
+            treatment_planned='Scaling and review',
+            treatment_performed='Scaling and polishing',
+            materials_used='Polishing paste',
+            next_visit_instructions='Review in one month',
+            notes='X-ray reviewed',
+            treatment_scope='whole_mouth',
+        )
+        response = self.client.get('/api/clinical-notes/timeline/', {'patient': str(self.patient.pk)})
+        self.assertEqual(response.status_code, 200)
+        events = response.data.get('results', response.data)
+        event = next(item for item in events if item['id'] == str(note.pk))
+        self.assertEqual(event['subtitle'], 'Feeling pain in the gum')
+        self.assertEqual(event['meta']['chief_complaint'], 'Feeling pain in the gum')
+        self.assertEqual(event['meta']['clinical_findings'], 'Inflamed gingiva with plaque deposits')
+        self.assertEqual(event['meta']['diagnosis'], 'Acute gingivitis')
+        self.assertEqual(event['meta']['treatment_planned'], 'Scaling and review')
+        self.assertEqual(event['meta']['treatment_performed'], 'Scaling and polishing')
+        self.assertEqual(event['meta']['materials_used'], 'Polishing paste')
+        self.assertEqual(event['meta']['next_visit_instructions'], 'Review in one month')
+        self.assertEqual(event['meta']['notes'], 'X-ray reviewed')
 
     def test_orthodontic_visit_update_moves_one_source_reminder(self):
         case = OrthodonticCase.objects.create(patient=self.patient, start_date=date.today(), diagnosis='Class II')

@@ -121,6 +121,15 @@ describe('administrator-controlled task workflow', () => {
     expect(screen.getByRole('button', { name: 'Save Task' })).toBeInTheDocument()
   })
 
+  it('lets an administrator refresh task stages without reloading the page', async () => {
+    render(<MemoryRouter initialEntries={['/tasks']}><TasksPage /></MemoryRouter>)
+    await waitFor(() => expect(service.getTasks).toHaveBeenCalledTimes(1))
+    const refresh = screen.getByRole('button', { name: 'Refresh task list' })
+    fireEvent.click(refresh)
+    await waitFor(() => expect(service.getTasks).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('heading', { name: 'Tasks' })).toBeInTheDocument()
+  })
+
   it('removes protected assignment and recurrence fields from non-admin updates', async () => {
     const onSave = vi.fn().mockResolvedValue()
     render(<TaskModal task={{ ...assignedTask, assigned_user: 'user-1', recurrence: 'weekly', recurrence_weekdays: [1], parent_task: 'parent-1' }} staff={[]} canAssign={false} onClose={vi.fn()} onSave={onSave} />)

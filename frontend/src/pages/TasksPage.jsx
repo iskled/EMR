@@ -39,7 +39,6 @@ import {
   updateTask,
   updateTaskAlert,
   updateChecklistItem,
-  uploadTaskAttachment,
   transitionTask,
 } from '../services/tasks.service'
 
@@ -62,7 +61,7 @@ export default function TasksPage() {
   const location = useLocation()
   const canCreate = hasPermission(user, 'tasks.create')
   const canAssign = hasPermission(user, 'tasks.assign')
-  const canDelete = user?.role === 'admin' || user?.is_superuser
+  const canDelete = hasPermission(user, 'tasks.delete')
   const [view, setView] = useState('list')
   const [filters, setFilters] = useState(initialFilters)
   const [tasks, setTasks] = useState([])
@@ -75,10 +74,12 @@ export default function TasksPage() {
   const [editingTask, setEditingTask] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
   const creationRequested = location.pathname === '/tasks/new' || new URLSearchParams(location.search).get('action') === 'new'
   const requestedTaskId = new URLSearchParams(location.search).get('task')
+  const requestedPatientId = new URLSearchParams(location.search).get('patient') || ''
 
   const requestParams = useMemo(() => {
     return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== ''))
@@ -111,9 +112,10 @@ export default function TasksPage() {
     setTemplates(templateData)
   }
 
-  async function loadTasks() {
+  async function loadTasks({ background = false } = {}) {
     try {
-      setLoading(true)
+      if (background) setRefreshing(true)
+      else setLoading(true)
       setError('')
       const [taskData, metricData, alertData, notificationData] = await Promise.all([
         getTasks(requestParams),
@@ -135,8 +137,13 @@ export default function TasksPage() {
     } catch {
       setError('Unable to load task data.')
     } finally {
-      setLoading(false)
+      if (background) setRefreshing(false)
+      else setLoading(false)
     }
+  }
+
+  async function handleAdminRefresh() {
+    await loadTasks({ background: true })
   }
 
   async function loadNotifications() {
@@ -229,17 +236,12 @@ export default function TasksPage() {
     await loadTasks()
   }
 
-  async function handleAttachmentUpload(task, payload) {
-    await uploadTaskAttachment({ ...payload, task: task.id })
-    await loadTasks()
-  }
-
   async function handleDelete(task) {
     if (!canDelete) return
-    if (!window.confirm(`Delete task "${task.title}"? Notes: ${(task.progress_updates || []).length}. Pictures: ${(task.attachments || []).length}. This action is audited.`)) return
+    if (!window.confirm(`Delete task "${task.title}"? Notes: ${(task.progress_updates || []).length}. This action is audited.`)) return
     const reason = window.prompt('Enter the deletion reason:')?.trim()
     if (!reason) return
-    const hasHistory = (task.progress_updates || []).length || (task.attachments || []).length
+    const hasHistory = (task.progress_updates || []).length
     const confirmation = hasHistory ? window.prompt(`Type the exact task title to confirm: ${task.title}`) : ''
     if (hasHistory && confirmation !== task.title) return
     await deleteTask(task.id, { reason, confirmation })
@@ -304,10 +306,24 @@ export default function TasksPage() {
           <h1 className="text-3xl font-bold text-gray-900">Tasks</h1>
           <p className="text-sm text-gray-500">Practice administration, clinical follow-up, checklist, and alert workflows.</p>
         </div>
-        {canCreate && <button type="button" onClick={openCreate} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-          New task
-        </button>}
+        {canCreate && <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleAdminRefresh}
+            disabled={refreshing}
+            aria-label={refreshing ? 'Refreshing task list' : 'Refresh task list'}
+            className="rounded-md border border-blue-300 bg-white px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60"
+          >
+            <span aria-hidden="true" className={refreshing ? 'inline-block animate-spin' : 'inline-block'}>↻</span>{' '}
+            {refreshing ? 'Refreshing…' : 'Refresh tasks'}
+          </button>
+          <button type="button" onClick={openCreate} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+            New task
+          </button>
+        </div>}
       </div>
+
+      {refreshing && <span className="sr-only" role="status" aria-live="polite">Refreshing task list</span>}
 
       {creationRequested && !canCreate && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900">Task creation is restricted to administrators. You can continue managing tasks assigned to you.</div>}
 
@@ -374,7 +390,7 @@ export default function TasksPage() {
         <ChecklistTemplateManager templates={templates} onCreate={handleCreateTemplate} />
       )}
       {!loading && view === 'alerts' && (
-        <TaskAlerts alerts={alerts} onAction={handleAlertAction} />
+        <TaskAlerts alerts={alerts} onAction={handleAlertAction} canClear={canAssign} />
       )}
 
       {showModal && (editingTask || canCreate) && (
@@ -384,6 +400,7 @@ export default function TasksPage() {
           onClose={() => setShowModal(false)}
           onSave={saveTask}
           canAssign={canAssign}
+          initialPatientId={requestedPatientId}
         />
       )}
 
@@ -401,7 +418,6 @@ export default function TasksPage() {
         onBlocked={handleBlocked}
         onResume={handleResume}
         onProgressUpdate={handleProgressUpdate}
-        onAttachmentUpload={handleAttachmentUpload}
         onComplete={handleComplete}
         onDelete={handleDelete}
         onReassign={handleReassign}

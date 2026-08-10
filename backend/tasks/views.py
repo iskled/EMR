@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.http import FileResponse
+from django.shortcuts import get_object_or_404
 from django.db.models import Count
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -24,7 +25,7 @@ from .models import (
     TaskNotification,
     TaskProgressUpdate,
 )
-from .permissions import CanManageChecklistTemplates, CanManageTasks, is_admin
+from .permissions import CanManageChecklistTemplates, CanManageTasks, is_admin, user_can_see_task
 from .serializers import (
     ChecklistTemplateSerializer,
     StaffSerializer,
@@ -62,8 +63,7 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         ).prefetch_related(
             'watchers', 'checklist_items', 'dependencies__depends_on',
             'comments__author', 'alerts', 'assignment_history',
-            'progress_updates__created_by', 'progress_updates__attachments',
-            'attachments__uploaded_by',
+            'progress_updates__created_by',
         )
         if user.role == 'admin' or user.is_superuser:
             return qs
@@ -72,10 +72,13 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         assigned_user = serializer.validated_data.get('assigned_user')
         status_value = 'pending_acceptance' if assigned_user else serializer.validated_data.get('status', 'not_started')
-        instance = serializer.save(created_by=self.request.user, status=status_value)
+        instance = serializer.save(created_by=self.request.user, status=status_value,
+                                   progress_percentage=Task.percentage_for_stage(status_value))
         self._log(self.request, 'create', instance)
         self._record_assignment(instance, None, '', instance.assigned_user, instance.assigned_role, 'Task created')
         self._notify_assignment(instance, 'task_assigned')
+        if instance.patient_id:
+            audit_event('task_patient_linked', 'Task', instance.pk, request=self.request, patient_id=instance.patient_id, source_module='tasks')
 
     def _record_assignment(self, task, from_user, from_role, to_user, to_role, notes=''):
         TaskAssignmentHistory.objects.create(
@@ -125,12 +128,14 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             'status': task.status,
             'assigned_user': task.assigned_user_id,
             'assigned_role': task.assigned_role,
+            'patient': str(task.patient_id) if task.patient_id else None,
         }
         instance = serializer.save()
         current = {
             'status': instance.status,
             'assigned_user': instance.assigned_user_id,
             'assigned_role': instance.assigned_role,
+            'patient': str(instance.patient_id) if instance.patient_id else None,
         }
         if previous != current:
             audit_event(
@@ -143,6 +148,10 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 new_values=current,
                 source_module='tasks',
             )
+        if previous['patient'] != current['patient']:
+            audit_event('task_patient_link_changed', 'Task', instance.pk, request=self.request,
+                        patient_id=instance.patient_id, previous_values={'patient': previous['patient']},
+                        new_values={'patient': current['patient']}, source_module='tasks')
         if previous['status'] != instance.status:
             if instance.status == 'blocked':
                 self._notify_admins(instance, 'task_blocked', f'Task Blocked: {instance.title}', 'Task was marked blocked.')
@@ -227,12 +236,13 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             return Response({'error': 'Only pending acceptance tasks can be accepted.'}, status=400)
         previous = {'status': task.status}
         task.status = 'accepted'
+        task.progress_percentage = Task.percentage_for_stage('accepted')
         task.accepted_at = timezone.now()
         task.accepted_by = request.user
-        task.save(update_fields=['status', 'accepted_at', 'accepted_by', 'updated_at'])
+        task.save(update_fields=['status', 'progress_percentage', 'accepted_at', 'accepted_by', 'updated_at'])
         task.notifications.filter(recipient=request.user, is_read=False).update(is_read=True, read_at=timezone.now())
         audit_event('task_accept', 'Task', task.pk, request=request, patient_id=task.patient_id, previous_values=previous, new_values={'status': task.status}, source_module='tasks')
-        self._append_progress(task, request.user, 'Task accepted.', None, 'accepted', 'pending_acceptance', 'accepted')
+        self._append_progress(task, request.user, 'Task accepted.', task.progress_percentage, 'accepted', 'pending_acceptance', 'accepted')
         self._notify_admins(task, 'task_accepted', f'Task Accepted: {task.title}', f'{request.user.get_full_name() or request.user.email} accepted the task.')
         return Response(TaskSerializer(task, context={'request': request}).data)
 
@@ -277,11 +287,10 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             return Response({'reason': 'An administrative override reason is required.'}, status=400)
         previous = {'status': previous_stage, 'progress_percentage': task.progress_percentage}
         task.status = new_status
+        task.progress_percentage = Task.percentage_for_stage(new_status)
         if update_fields:
             for field, value in update_fields.items():
                 setattr(task, field, value)
-        if percentage is not None:
-            task.progress_percentage = percentage
         if note:
             task.latest_progress_summary = note
         fields = ['status', 'progress_percentage', 'latest_progress_summary', 'updated_at']
@@ -289,11 +298,11 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             fields.extend(update_fields.keys())
         task.save(update_fields=list(dict.fromkeys(fields)))
         event_type = 'admin_override' if admin_override else ('reversed' if reverse else 'stage_changed')
-        update = self._append_progress(task, request.user, note or f'Status changed to {task.get_status_display()}.', task.progress_percentage, event_type, previous_stage, new_status, reason)
+        update = self._append_progress(task, request.user, note or f'Status changed to {task.get_status_display()}.', task.progress_percentage, event_type, previous_stage, new_status, reason, previous['progress_percentage'])
         audit_event('task_admin_override' if admin_override else 'task_stage_change', 'Task', task.pk, request=request, patient_id=task.patient_id, previous_values=previous, new_values={'status': task.status, 'progress_percentage': task.progress_percentage}, source_module='tasks', metadata={'reason': reason, 'note': note, 'reverse': reverse})
         return update
 
-    def _append_progress(self, task, user, note, percentage, event_type='note', previous_stage='', new_stage='', reason=''):
+    def _append_progress(self, task, user, note, percentage, event_type='note', previous_stage='', new_stage='', reason='', previous_percentage=None):
         update = TaskProgressUpdate.objects.create(
             task=task,
             note=note,
@@ -303,6 +312,8 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             event_type=event_type,
             previous_stage=previous_stage,
             new_stage=new_stage,
+            previous_percentage=previous_percentage,
+            new_percentage=percentage,
             reason=reason,
         )
         if percentage is not None:
@@ -331,6 +342,7 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
             task.save(update_fields=['completed_at', 'completed_by', 'progress_percentage', 'updated_at'])
         if new_stage in {'waiting_for_vendor', 'waiting_for_staff', 'resolved', 'closed'} or (result.previous_stage, result.new_stage) in Task.REVERSE_TRANSITIONS:
             self._notify_admins(task, f'task_{new_stage}', f'Task {task.get_status_display()}: {task.title}', result.note)
+        task.refresh_from_db()
         return Response(TaskSerializer(task, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], url_path='admin-override')
@@ -433,15 +445,11 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         if is_admin(request.user) or task.assigned_user_id != request.user.id:
             return Response({'error': 'Only the assigned non-admin staff member may add progress updates.'}, status=403)
         note = (request.data.get('note') or '').strip()
-        percentage = request.data.get('percentage', None)
+        if 'percentage' in request.data:
+            return Response({'percentage': 'Completion percentage is calculated automatically from the task stage.'}, status=400)
         if not note:
             return Response({'note': 'Progress note is required.'}, status=400)
-        if percentage in ('', None):
-            percentage = None
-        else:
-            percentage = int(percentage)
-            if percentage < 0 or percentage > 100:
-                return Response({'percentage': 'Progress percentage must be between 0 and 100.'}, status=400)
+        percentage = Task.percentage_for_stage(task.status)
         update = self._append_progress(task, request.user, note, percentage)
         audit_event('task_progress_update', 'Task', task.pk, request=request, patient_id=task.patient_id, source_module='tasks', metadata={'progress_update_id': update.pk, 'percentage': percentage})
         return Response(TaskProgressUpdateSerializer(update, context={'request': request}).data, status=201)
@@ -454,7 +462,8 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         task.assigned_user = request.user
         task.assigned_role = ''
         task.status = 'pending_acceptance'
-        task.save(update_fields=['assigned_user', 'assigned_role', 'status', 'updated_at'])
+        task.progress_percentage = 0
+        task.save(update_fields=['assigned_user', 'assigned_role', 'status', 'progress_percentage', 'updated_at'])
         self._record_assignment(task, old_user, old_role, request.user, '', 'Claimed task')
         audit_event('task_assignment', 'Task', task.pk, request=request, patient_id=task.patient_id, source_module='tasks', metadata={'to_user': request.user.email})
         return Response(TaskSerializer(task, context={'request': request}).data)
@@ -471,7 +480,8 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         task.assigned_user_id = assigned_user
         task.assigned_role = assigned_role
         task.status = 'pending_acceptance' if assigned_user else 'not_started'
-        task.save(update_fields=['assigned_user', 'assigned_role', 'status', 'updated_at'])
+        task.progress_percentage = Task.percentage_for_stage(task.status)
+        task.save(update_fields=['assigned_user', 'assigned_role', 'status', 'progress_percentage', 'updated_at'])
         self._record_assignment(task, old_user, old_role, task.assigned_user, assigned_role, request.data.get('notes', ''))
         audit_event('task_reassignment', 'Task', task.pk, request=request, patient_id=task.patient_id, source_module='tasks', metadata={'assigned_user': assigned_user, 'assigned_role': assigned_role})
         self._notify_assignment(task, 'task_reassigned')
@@ -488,7 +498,7 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
         if not task.can_transition_to('completed', request.user):
             return Response({'error': 'This task must be accepted before it can be completed.'}, status=400)
         if not task.can_complete():
-            return Response({'error': 'Required checklist items and dependencies must be completed first.'}, status=400)
+            return Response({'error': 'Task dependencies must be completed first.'}, status=400)
         task.status = 'completed'
         task.completed_at = timezone.now()
         task.completed_by = request.user
@@ -528,6 +538,9 @@ class TaskViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='apply-template')
     def apply_template(self, request, pk=None):
+        if not is_admin(request.user):
+            audit_event('task_checklist_access_denied', 'Task', pk, request=request, success=False, failure_reason='permission denied', source_module='tasks')
+            return Response({'detail': 'Only administrators can manage task checklists.'}, status=403)
         task = self.get_object()
         template_id = request.data.get('template')
         template = ChecklistTemplate.objects.prefetch_related('items').get(pk=template_id, is_active=True)
@@ -580,10 +593,36 @@ class TaskChecklistItemViewSet(AuditLogMixin, viewsets.ModelViewSet):
     filterset_fields = ['task', 'is_completed', 'is_required']
 
     def get_queryset(self):
-        return TaskChecklistItem.objects.select_related('task', 'completed_by', 'template_item')
+        qs = TaskChecklistItem.objects.select_related('task', 'completed_by', 'template_item')
+        return qs if is_admin(self.request.user) else qs.none()
+
+    def _admin_only(self, request):
+        if is_admin(request.user):
+            return None
+        audit_event('task_checklist_access_denied', 'TaskChecklistItem', request=request, success=False, failure_reason='permission denied', source_module='tasks')
+        return Response({'detail': 'Only administrators can manage task checklists.'}, status=403)
+
+    def create(self, request, *args, **kwargs):
+        denied = self._admin_only(request)
+        return denied or super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        denied = self._admin_only(request)
+        return denied or super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        denied = self._admin_only(request)
+        return denied or super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        denied = self._admin_only(request)
+        return denied or super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
+        denied = self._admin_only(request)
+        if denied is not None:
+            return denied
         item = self.get_object()
         item.is_completed = True
         item.completed_by = request.user
@@ -621,23 +660,42 @@ class TaskAttachmentViewSet(AuditLogMixin, viewsets.ModelViewSet):
             return qs
         return qs.filter(task__assigned_user=user, archived_at__isnull=True)
 
-    def perform_create(self, serializer):
-        instance = serializer.save(uploaded_by=self.request.user)
-        audit_event('task_attachment_upload', 'TaskAttachment', instance.pk, request=self.request, patient_id=instance.task.patient_id, source_module='tasks', metadata={'task_id': instance.task_id, 'mime_type': instance.mime_type, 'file_size': instance.file_size})
-        TaskProgressUpdate.objects.create(
-            task=instance.task,
-            note=f'Attachment uploaded: {instance.original_filename or instance.title or "file"}',
-            percentage=instance.task.progress_percentage,
-            status_at_time=instance.task.status,
-            created_by=self.request.user,
-        )
+    def create(self, request, *args, **kwargs):
+        audit_event('task_attachment_upload_denied', 'TaskAttachment', request=request, success=False,
+                    failure_reason='Task attachments are retired', source_module='tasks')
+        return Response({'detail': 'Task attachment uploads have been retired.'}, status=410)
+
+    def _secure_attachment(self, request, pk):
+        attachment = get_object_or_404(TaskAttachment.objects.select_related('task'), pk=pk, archived_at__isnull=True)
+        if not user_can_see_task(request.user, attachment.task):
+            audit_event('task_attachment_access_denied', 'TaskAttachment', attachment.pk, request=request,
+                        success=False, failure_reason='permission denied', source_module='tasks',
+                        metadata={'task_id': attachment.task_id})
+            return None, Response({'detail': 'You do not have permission to access this attachment.'}, status=403)
+        return attachment, None
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
-        attachment = self.get_object()
+        attachment, denied = self._secure_attachment(request, pk)
+        if denied is not None:
+            return denied
+        audit_event('task_attachment_download', 'TaskAttachment', attachment.pk, request=request, patient_id=attachment.task.patient_id, source_module='tasks')
         response = FileResponse(attachment.file.open('rb'), content_type=attachment.mime_type or 'application/octet-stream')
         filename = attachment.original_filename or attachment.file.name.split('/')[-1]
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    @action(detail=True, methods=['get'])
+    def preview(self, request, pk=None):
+        attachment, denied = self._secure_attachment(request, pk)
+        if denied:
+            return denied
+        if attachment.mime_type not in {'image/jpeg', 'image/png', 'image/webp'}:
+            return Response({'detail': 'Preview is unavailable for this file type.'}, status=415)
+        audit_event('task_attachment_preview', 'TaskAttachment', attachment.pk, request=request, patient_id=attachment.task.patient_id, source_module='tasks')
+        response = FileResponse(attachment.file.open('rb'), content_type=attachment.mime_type)
+        response['Content-Disposition'] = f'inline; filename="{attachment.original_filename or "task-image"}"'
+        response['Cache-Control'] = 'private, no-store'
         return response
 
     @action(detail=True, methods=['post'])
@@ -678,6 +736,9 @@ class TaskAlertViewSet(viewsets.ModelViewSet):
 
     def _set_status(self, request, status_value):
         alert = self.get_object()
+        if status_value == 'dismissed' and not is_admin(request.user):
+            return Response({'detail': 'Only administrators may clear task alerts.'}, status=403)
+        previous_status = alert.status
         alert.status = status_value
         if status_value == 'acknowledged':
             alert.acknowledged_by = request.user
@@ -686,6 +747,12 @@ class TaskAlertViewSet(viewsets.ModelViewSet):
             alert.dismissed_by = request.user
             alert.dismissed_at = timezone.now()
         alert.save()
+        audit_event(
+            'task_alert_cleared' if status_value == 'dismissed' else 'task_alert_status_changed',
+            'TaskAlert', alert.pk, request=request, patient_id=alert.task.patient_id,
+            previous_values={'status': previous_status}, new_values={'status': status_value},
+            source_module='tasks', metadata={'task_id': alert.task_id, 'alert_type': alert.alert_type},
+        )
         return Response(TaskAlertSerializer(alert).data)
 
     @action(detail=True, methods=['post'])

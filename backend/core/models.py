@@ -182,6 +182,23 @@ class AuditEvent(models.Model):
         return f'{self.timestamp} {self.user_email} {self.action} {self.resource_type}:{self.resource_id}'
 
 
+class AuditClearance(models.Model):
+    cleared_through = models.DateTimeField(db_index=True)
+    cleared_by = models.ForeignKey(
+        'authentication.User', on_delete=models.SET_NULL, null=True,
+        related_name='audit_clearances',
+    )
+    event_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'audit_clearances'
+        ordering = ['-cleared_through']
+
+    def __str__(self):
+        return f'Cleared through {self.cleared_through} by {self.cleared_by}'
+
+
 class SecurityAlert(models.Model):
     SEVERITY_CHOICES = [
         ('low', 'Low'),

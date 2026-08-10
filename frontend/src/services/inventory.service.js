@@ -82,6 +82,11 @@ export const issueStock = async payload => {
   return response.data
 }
 
+export const bulkIssueStock = async payload => {
+  const response = await api.post('/inventory-items/usage/bulk/', payload)
+  return response.data
+}
+
 export const adjustStock = async payload => {
   const response = await api.post('/inventory-items/adjustment/', payload)
   return response.data

@@ -88,6 +88,41 @@ class ReminderWorkflowTests(APITestCase):
         self.assertEqual(self.client.post(f'/api/recalls/{reminder.pk}/archive/',
             {'reason': 'Closed'}, format='json').status_code, 200)
 
+    def test_confirmed_contact_outcome_updates_status_and_preserves_history(self):
+        reminder = self.reminder('active')
+        response = self.client.post(f'/api/recalls/{reminder.pk}/contact/', {
+            'method': 'phone', 'outcome': 'confirmed', 'notes': 'Patient confirmed attendance'
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, 'confirmed')
+        self.assertEqual(len(reminder.contact_history), 1)
+        self.assertEqual(reminder.contact_history[0]['notes'], 'Patient confirmed attendance')
+
+    def test_cancelling_booking_moves_reminder_to_cancelled(self):
+        reminder = self.reminder('confirmed')
+        appointment = self.appointment()
+        from clinical.reminder_workflow import transition_reminder
+        transition_reminder(reminder, 'booked', self.dentist, appointment=appointment)
+        response = self.client.post(
+            f'/api/recalls/{reminder.pk}/cancel-booking/', {'reason': 'Patient unavailable'}, format='json')
+        self.assertEqual(response.status_code, 200)
+        reminder.refresh_from_db()
+        appointment.refresh_from_db()
+        self.assertEqual(reminder.status, 'cancelled')
+        self.assertEqual(reminder.cancellation_reason, 'Patient unavailable')
+        self.assertEqual(appointment.status, 'cancelled')
+
+    def test_overdue_excludes_completed_and_cancelled_reminders(self):
+        for status in ('active', 'completed', 'cancelled'):
+            reminder = self.reminder(status)
+            reminder.due_date = date.today() - timedelta(days=1)
+            reminder.save(update_fields=['due_date'])
+        response = self.client.get('/api/recalls/?overdue=true')
+        self.assertEqual(response.status_code, 200)
+        records = response.data.get('results', response.data)
+        self.assertEqual([record['status'] for record in records], ['active'])
+
     def test_invalid_transition_and_duplicate_are_rejected(self):
         reminder = self.reminder('active')
         skipped = self.client.post(
@@ -125,6 +160,7 @@ class ReminderWorkflowTests(APITestCase):
         reminder.refresh_from_db()
         self.assertIsNone(reminder.archived_at)
         self.assertIsNotNone(reminder.restored_at)
+        self.assertEqual(reminder.status, 'active')
 
     def test_orthodontic_visit_immediately_creates_review_reminder(self):
         case = OrthodonticCase.objects.create(

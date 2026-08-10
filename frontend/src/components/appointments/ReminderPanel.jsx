@@ -35,6 +35,15 @@ const nextOptions = [
   ["custom", "Custom Date"],
 ];
 
+const actionBase =
+  "inline-flex items-center whitespace-nowrap text-left text-xs font-semibold leading-tight transition-colors hover:underline focus:outline-none focus:underline";
+const actionStyles = {
+  primary: `${actionBase} text-blue-700 hover:text-blue-900`,
+  secondary: `${actionBase} text-slate-700 hover:text-slate-950`,
+  success: `${actionBase} text-emerald-700 hover:text-emerald-900`,
+  danger: `${actionBase} text-red-700 hover:text-red-900`,
+};
+
 function addDays(days) {
   const value = new Date();
   value.setDate(value.getDate() + Number(days));
@@ -54,18 +63,26 @@ export default function ReminderPanel({ onBook }) {
   const [reason, setReason] = useState("");
   const [newDate, setNewDate] = useState("");
   const [contactNotes, setContactNotes] = useState("");
+  const [contactMethod, setContactMethod] = useState("phone");
+  const [contactOutcome, setContactOutcome] = useState("contacted");
+  const [notice, setNotice] = useState("");
+  const [processing, setProcessing] = useState("");
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      const params = { ordering: "due_date" };
-      if (filter === "archived") params.archived = "true";
-      else if (filter === "overdue") params.overdue = "true";
-      else if (filter === "orthodontic") params.recall_type = "orthodontic";
-      else if (filter !== "all") params.status = filter;
-      const data = await getReminders(params);
-      setItems(data.results || data || []);
+      const [activeResult, archivedResult] = await Promise.allSettled([
+        getReminders({ ordering: "due_date" }),
+        getReminders({ ordering: "due_date", archived: "true" }),
+      ]);
+      if (activeResult.status === "rejected") throw activeResult.reason;
+      const activeData = activeResult.value;
+      const archivedData = archivedResult.status === "fulfilled" ? archivedResult.value : [];
+      setItems([
+        ...(activeData.results || activeData || []),
+        ...(archivedData.results || archivedData || []),
+      ]);
     } catch {
       setError("Reminders could not be loaded.");
     } finally {
@@ -75,13 +92,52 @@ export default function ReminderPanel({ onBook }) {
 
   useEffect(() => {
     load();
-  }, [filter]);
+  }, []);
   const today = new Date().toISOString().slice(0, 10);
-  const shown = useMemo(() => items, [items]);
+  const matchesFilter = (reminder, selectedFilter) => {
+    const archived = Boolean(reminder.archived_at);
+    if (selectedFilter === "archived") return archived;
+    if (archived) return false;
+    if (selectedFilter === "all") return true;
+    if (selectedFilter === "orthodontic") return reminder.recall_type === "orthodontic";
+    if (selectedFilter === "overdue") {
+      return reminder.due_date < today && !["completed", "cancelled"].includes(reminder.status);
+    }
+    return reminder.status === selectedFilter;
+  };
+  const shown = useMemo(
+    () => items.filter((reminder) => matchesFilter(reminder, filter)),
+    [items, filter, today],
+  );
+  const tabCounts = useMemo(
+    () => Object.fromEntries(tabs.map((tab) => [tab, items.filter((item) => matchesFilter(item, tab)).length])),
+    [items, today],
+  );
+
+  async function performAction(key, operation, successMessage) {
+    if (processing) return false;
+    setProcessing(key);
+    setError("");
+    setNotice("");
+    try {
+      await operation();
+      await load();
+      setNotice(successMessage);
+      return true;
+    } catch {
+      setError("The reminder could not be updated. Please try again.");
+      return false;
+    } finally {
+      setProcessing("");
+    }
+  }
 
   async function transition(reminder, status, extra = {}) {
-    await transitionReminder(reminder.id, { status, ...extra });
-    await load();
+    return performAction(
+      `${reminder.id}:${status}`,
+      () => transitionReminder(reminder.id, { status, ...extra }),
+      `Reminder moved to ${status}.`,
+    );
   }
 
   async function finish() {
@@ -94,11 +150,17 @@ export default function ReminderPanel({ onBook }) {
       payload.next_type =
         nextChoice === "orthodontic" ? "orthodontic" : completing.recall_type;
     }
-    await completeReminder(completing.id, payload);
-    setCompleting(null);
-    setNextChoice("none");
-    setCustomDate("");
-    await load();
+    const completed = completing;
+    const saved = await performAction(
+      `${completed.id}:complete`,
+      () => completeReminder(completed.id, payload),
+      "Reminder completed.",
+    );
+    if (saved) {
+      setCompleting(null);
+      setNextChoice("none");
+      setCustomDate("");
+    }
   }
 
   return (
@@ -110,10 +172,11 @@ export default function ReminderPanel({ onBook }) {
             onClick={() => setFilter(value)}
             className={`rounded-lg px-3 py-2 text-sm font-semibold capitalize ${filter === value ? "bg-blue-700 text-white" : "border bg-white"}`}
           >
-            {value === "orthodontic" ? "Orthodontic Review" : value}
+            {value === "orthodontic" ? "Orthodontic Review" : value} ({tabCounts[value] || 0})
           </button>
         ))}
       </div>
+      {notice && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm font-medium text-emerald-800">{notice}</p>}
       {loading ? (
         <p className="p-8">Loading reminders…</p>
       ) : error ? (
@@ -134,7 +197,7 @@ export default function ReminderPanel({ onBook }) {
                 <th>Appointment</th>
                 <th>Dentist</th>
                 <th>Booked By / On</th>
-                <th>Actions</th>
+                <th className="min-w-[520px] px-3">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -180,17 +243,19 @@ export default function ReminderPanel({ onBook }) {
                         </div>
                       )}
                     </td>
-                    <td>
-                      <div className="flex flex-wrap gap-2">
+                    <td className="p-3">
+                      <fieldset disabled={Boolean(processing)} className="flex min-w-max flex-nowrap items-center gap-3 disabled:opacity-60">
                         {["active","contacted","confirmed","booked"].includes(reminder.status) && (
                           <button
-                            onClick={() => {setDialog({type:"contact",reminder});setContactNotes("")}}
+                            className={actionStyles.secondary}
+                            onClick={() => {setDialog({type:"contact",reminder});setContactNotes("");setContactMethod("phone");setContactOutcome("contacted")}}
                           >
                             {reminder.status==="contacted"||reminder.status==="confirmed" ? "Contact Again" : "Contact"}
                           </button>
                         )}
                         {reminder.status === "contacted" && (
                           <button
+                            className={actionStyles.success}
                             onClick={() => transition(reminder, "confirmed")}
                           >
                             Confirm
@@ -199,51 +264,54 @@ export default function ReminderPanel({ onBook }) {
                         {reminder.status === "confirmed" && (
                           <button
                             onClick={() => onBook(reminder)}
-                            className="font-semibold text-blue-700"
+                            className={actionStyles.primary}
                           >
                             Book Appointment
                           </button>
                         )}
                         {["active","contacted","confirmed"].includes(reminder.status) && <>
-                          <button onClick={()=>{setDialog({type:"reschedule",reminder});setReason("");setNewDate("")}}>Reschedule Reminder</button>
-                          <button onClick={()=>{setDialog({type:"cancel",reminder});setReason("")}}>Cancel Reminder</button>
+                          <button className={actionStyles.secondary} onClick={()=>{setDialog({type:"reschedule",reminder});setReason("");setNewDate("")}}>Reschedule Reminder</button>
+                          <button className={actionStyles.danger} onClick={()=>{setDialog({type:"cancel",reminder});setReason("")}}>Cancel Reminder</button>
                         </>}
                         {reminder.status === "booked" && (
                           <>
-                            <a
-                              className="text-blue-700"
-                              href={`/appointments?appointment=${reminder.linked_appointment}`}
-                            >
-                              View Appointment
-                            </a>
-                            <a
-                              href={`/appointments?appointment=${reminder.linked_appointment}`}
-                            >
-                              Reschedule
-                            </a>
-                            <button onClick={() => setCompleting(reminder)}>
+                            {reminder.linked_appointment ? <>
+                              <a
+                                className={actionStyles.primary}
+                                href={`/appointments?appointment=${reminder.linked_appointment}`}
+                              >
+                                View Appointment
+                              </a>
+                              <a
+                                className={actionStyles.secondary}
+                                href={`/appointments?appointment=${reminder.linked_appointment}`}
+                              >
+                                Reschedule
+                              </a>
+                            </> : <span className="text-xs font-medium text-amber-700">Linked appointment unavailable</span>}
+                            <button className={actionStyles.success} onClick={() => setCompleting(reminder)}>
                               Complete
                             </button>
-                            <button onClick={()=>{setDialog({type:"cancelBooking",reminder});setReason("")}}>
+                            <button className={actionStyles.danger} onClick={()=>{setDialog({type:"cancelBooking",reminder});setReason("")}}>
                               Cancel Booking
                             </button>
                           </>
                         )}
                         {reminder.status === "completed" && (
-                          <button onClick={() => setArchiving(reminder)}>
+                          <button className={actionStyles.secondary} onClick={() => setArchiving(reminder)}>
                             Archive
                           </button>
                         )}
                         {reminder.status === "cancelled" && <>
-                          <a href={`/patients?patient=${reminder.patient}`}>View History</a>
-                          <button onClick={async()=>{await restoreCancelledReminder(reminder.id);await load()}}>Restore</button>
-                          <button onClick={()=>setArchiving(reminder)}>Archive</button>
+                          <a className={actionStyles.primary} href={`/patients?patient=${reminder.patient}`}>View History</a>
+                          <button className={actionStyles.success} onClick={()=>performAction(`${reminder.id}:restore`,()=>restoreCancelledReminder(reminder.id),"Reminder restored to active.")}>Restore</button>
+                          <button className={actionStyles.secondary} onClick={()=>setArchiving(reminder)}>Archive</button>
                         </>}
                         {filter === "archived" && <>
-                          <a href={`/patients?patient=${reminder.patient}`}>View History</a>
-                          <button onClick={async()=>{await restoreReminder(reminder.id);await load()}}>Restore</button>
+                          <a className={actionStyles.primary} href={`/patients?patient=${reminder.patient}`}>View History</a>
+                          <button className={actionStyles.success} onClick={()=>performAction(`${reminder.id}:restore`,()=>restoreReminder(reminder.id),"Reminder restored to active.")}>Restore</button>
                         </>}
-                      </div>
+                      </fieldset>
                     </td>
                   </tr>
                 );
@@ -305,10 +373,14 @@ export default function ReminderPanel({ onBook }) {
             <div className="mt-5 flex justify-end gap-3">
               <button onClick={() => setArchiving(null)}>Cancel</button>
               <button
+                disabled={Boolean(processing)}
                 onClick={async () => {
-                  await archiveReminder(archiving.id);
-                  setArchiving(null);
-                  await load();
+                  const saved = await performAction(
+                    `${archiving.id}:archive`,
+                    () => archiveReminder(archiving.id),
+                    "Reminder archived.",
+                  );
+                  if (saved) setArchiving(null);
                 }}
               >
                 Archive Reminder
@@ -319,17 +391,25 @@ export default function ReminderPanel({ onBook }) {
       )}
       {dialog && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-xl bg-white p-6">
         <h2 className="text-xl font-bold">{dialog.type==="contact"?"Record contact":dialog.type==="reschedule"?"Reschedule Reminder":dialog.type==="cancelBooking"?"Cancel Booking":"Cancel Reminder"}</h2>
-        {dialog.type==="contact"?<textarea aria-label="Contact notes" className="mt-4 w-full rounded border p-3" value={contactNotes} onChange={e=>setContactNotes(e.target.value)} placeholder="Method, outcome and notes"/>:<>
+        {dialog.type==="contact"?<div className="mt-4 space-y-3">
+          <label className="block text-sm font-semibold">Contact method<select aria-label="Contact method" className="mt-1 w-full rounded border p-3 font-normal" value={contactMethod} onChange={e=>setContactMethod(e.target.value)}><option value="phone">Phone</option><option value="sms">SMS</option><option value="email">Email</option><option value="in_person">In person</option></select></label>
+          <label className="block text-sm font-semibold">Outcome<select aria-label="Contact outcome" className="mt-1 w-full rounded border p-3 font-normal" value={contactOutcome} onChange={e=>setContactOutcome(e.target.value)}><option value="contacted">Contacted</option><option value="confirmed">Confirmed</option><option value="no_answer">No answer</option><option value="message_left">Message left</option></select></label>
+          <textarea aria-label="Contact notes" className="w-full rounded border p-3" value={contactNotes} onChange={e=>setContactNotes(e.target.value)} placeholder="Contact notes"/>
+        </div>:<>
           {dialog.type==="reschedule"&&<><p className="mt-3 text-sm">Current due date: {dialog.reminder.due_date}</p><input aria-label="New due date" type="date" className="mt-3 w-full rounded border p-3" value={newDate} onChange={e=>setNewDate(e.target.value)}/></>}
           <textarea aria-label="Reason" className="mt-3 w-full rounded border p-3" required value={reason} onChange={e=>setReason(e.target.value)} placeholder="Reason (required)"/>
         </>}
-        <div className="mt-4 flex justify-end gap-3"><button onClick={()=>setDialog(null)}>Cancel</button><button disabled={dialog.type!=="contact"&&!reason||dialog.type==="reschedule"&&!newDate} onClick={async()=>{
-          if(dialog.type==="contact")await contactReminder(dialog.reminder.id,{method:"phone",outcome:"contacted",notes:contactNotes})
-          else if(dialog.type==="reschedule")await rescheduleReminder(dialog.reminder.id,{new_due_date:newDate,reason})
-          else if(dialog.type==="cancelBooking")await cancelReminderBooking(dialog.reminder.id,reason)
-          else await cancelReminder(dialog.reminder.id,reason)
-          setDialog(null);await load()
-        }}>Save</button></div>
+        <div className="mt-4 flex justify-end gap-3"><button disabled={Boolean(processing)} onClick={()=>setDialog(null)}>Cancel</button><button disabled={Boolean(processing)||(dialog.type!=="contact"&&!reason)||dialog.type==="reschedule"&&!newDate} onClick={async()=>{
+          const action = dialog.type;
+          const reminder = dialog.reminder;
+          const saved = await performAction(`${reminder.id}:${action}`, async () => {
+            if(action==="contact") await contactReminder(reminder.id,{method:contactMethod,outcome:contactOutcome,notes:contactNotes})
+            else if(action==="reschedule") await rescheduleReminder(reminder.id,{new_due_date:newDate,reason})
+            else if(action==="cancelBooking") await cancelReminderBooking(reminder.id,reason)
+            else await cancelReminder(reminder.id,reason)
+          }, action==="contact"?"Contact attempt recorded.":action==="reschedule"?"Reminder rescheduled.":"Reminder cancelled.")
+          if(saved) setDialog(null)
+        }}>{processing ? "Saving..." : "Save"}</button></div>
       </div></div>}
     </section>
   );

@@ -12,6 +12,7 @@ const emptyForm = {
   temporary_password: '',
   force_password_change: true,
   is_active: true,
+  can_manage_dentists: false,
 }
 
 export default function UserModal({ user, onClose, onSave }) {
@@ -56,6 +57,7 @@ export default function UserModal({ user, onClose, onSave }) {
           {!user && <input name="temporary_password" value={form.temporary_password} onChange={update} required type="password" placeholder="Temporary password" className="rounded-md border border-gray-300 px-3 py-2 text-sm" />}
           <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" name="is_active" checked={form.is_active} onChange={update} /> Active</label>
           <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" name="force_password_change" checked={form.force_password_change} onChange={update} /> Force password change</label>
+          {form.role === 'nurse' && <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" name="can_manage_dentists" checked={form.can_manage_dentists} onChange={update} /> Manage dentist accounts</label>}
         </div>
         <div className="mt-6 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold">Cancel</button>

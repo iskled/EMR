@@ -4,6 +4,7 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
 
 from core.audit_service import audit_event, model_snapshot
 from core.audit import AuditLogMixin
@@ -45,6 +46,11 @@ class AppointmentViewSet(AuditLogMixin, viewsets.ModelViewSet):
         )
         if self.request.user.role == 'dentist':
             qs = qs.filter(dentist=self.request.user)
+        archived = self.request.query_params.get('archived', '').lower()
+        if archived == 'true':
+            qs = qs.filter(archived_at__isnull=False)
+        elif archived != 'all':
+            qs = qs.filter(archived_at__isnull=True)
         return qs
 
     def get_serializer_class(self):
@@ -92,6 +98,39 @@ class AppointmentViewSet(AuditLogMixin, viewsets.ModelViewSet):
             metadata={'cancellation_reason': serializer.validated_data.get('cancellation_reason', '')},
         )
         return Response(AppointmentDetailSerializer(appointment).data)
+
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk=None):
+        appointment = self.get_object()
+        if appointment.archived_at:
+            return Response(AppointmentDetailSerializer(appointment).data)
+        reason = (request.data.get('reason') or '').strip()
+        appointment.archived_at = timezone.now()
+        appointment.archived_by = request.user
+        appointment.archive_reason = reason
+        appointment.save(update_fields=['archived_at', 'archived_by', 'archive_reason', 'updated_at'])
+        audit_event(
+            'appointment_archived', 'Appointment', appointment.pk, request=request,
+            patient_id=appointment.patient_id, previous_values={'archived_at': None},
+            new_values={'archived_at': appointment.archived_at.isoformat()}, source_module='appointments',
+            metadata={'reason': reason, 'status': appointment.status},
+        )
+        return Response(AppointmentDetailSerializer(appointment).data)
+
+    def destroy(self, request, *args, **kwargs):
+        appointment = self.get_object()
+        if request.data.get('confirmation') != 'DELETE':
+            return Response({'confirmation': 'Enter DELETE to permanently delete this appointment.'}, status=400)
+        snapshot = model_snapshot(appointment)
+        appointment_id = appointment.pk
+        patient_id = appointment.patient_id
+        response = super().destroy(request, *args, **kwargs)
+        audit_event(
+            'appointment_deleted', 'Appointment', appointment_id, request=request,
+            patient_id=patient_id, previous_values=snapshot, source_module='appointments',
+            metadata={'status': appointment.status},
+        )
+        return response
 
     # ── Calendar view (grouped by date) ────────────────────────────────────────
 

@@ -55,7 +55,7 @@ class AppointmentDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Appointment
         fields = '__all__'
-        read_only_fields = ('created_by', 'created_at', 'updated_at')
+        read_only_fields = ('created_by', 'archived_at', 'archived_by', 'archive_reason', 'created_at', 'updated_at')
 
 
 # ── Write serializer (create / update) ───────────────────────────────────────
@@ -75,6 +75,16 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
     def validate_scheduled_date(self, value):
         if value < date.today() and not self.instance:
             raise serializers.ValidationError("Cannot schedule appointments in the past.")
+        return value
+
+    def validate_dentist(self, value):
+        if value.role != 'dentist' or not value.is_active:
+            raise serializers.ValidationError('Select an active eligible clinician.')
+        return value
+
+    def validate_duration_minutes(self, value):
+        if value not in {15, 30, 45, 60, 90, 120}:
+            raise serializers.ValidationError('Select a supported appointment duration.')
         return value
 
     def validate(self, data):
@@ -113,6 +123,8 @@ class AppointmentWriteSerializer(serializers.ModelSerializer):
                 dummy = date.today()
                 delta = datetime.combine(dummy, end) - datetime.combine(dummy, start)
                 data['duration_minutes'] = int(delta.total_seconds() / 60)
+            elif int((datetime.combine(date.today(), end) - datetime.combine(date.today(), start)).total_seconds() / 60) != data['duration_minutes']:
+                raise serializers.ValidationError({'end_time': 'End time must match start time and duration.'})
 
         if dentist and apt_date and start and end:
             # ── Dentist conflict ───────────────────────────────────────────────

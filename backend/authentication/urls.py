@@ -10,10 +10,12 @@ from .views import (
     PasswordChangeView,
     ProfileView,
     DentistListView
+    , DentistAccountViewSet
 )
 
 router = DefaultRouter()
 router.register(r'users', AdminUserViewSet, basename='auth-user')
+router.register(r'dentist-accounts', DentistAccountViewSet, basename='dentist-account')
 
 urlpatterns = [
     path('', include(router.urls)),

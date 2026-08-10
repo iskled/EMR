@@ -108,6 +108,19 @@ class Task(models.Model):
         ('resolved', 'waiting_for_vendor'), ('resolved', 'waiting_for_staff'),
         ('closed', 'resolved'),
     }
+    STAGE_PERCENTAGES = {
+        'pending_acceptance': 0,
+        'accepted': 25,
+        'in_progress': 50,
+        'waiting_for_vendor': 50,
+        'waiting_for_staff': 50,
+        'resolved': 90,
+        'closed': 100,
+    }
+
+    @classmethod
+    def percentage_for_stage(cls, stage):
+        return cls.STAGE_PERCENTAGES.get(stage)
 
     title = models.CharField(max_length=220)
     description = models.TextField(blank=True)
@@ -185,7 +198,9 @@ class Task(models.Model):
         return not self.dependencies.exclude(depends_on__status__in=['completed', 'cancelled']).exists()
 
     def can_complete(self):
-        return self.required_checklist_complete() and self.dependencies_resolved()
+        # Checklist rows are retained as historical/admin configuration data, but
+        # are no longer part of the assignee execution contract.
+        return self.dependencies_resolved()
 
     def allowed_transitions(self, user):
         return self.EXECUTION_TRANSITIONS.get(self.status, set())
@@ -277,6 +292,13 @@ class Task(models.Model):
         if self.status == 'awaiting_review' and not self.required_checklist_complete():
             rules.append(('checklist_incomplete', 'Required checklist items are incomplete.'))
         for alert_type, message in rules:
+            existing = self.alerts.filter(
+                alert_type=alert_type,
+                status__in=['open', 'acknowledged', 'dismissed'],
+            ).order_by('-created_at').first()
+            if existing:
+                alerts.append(existing)
+                continue
             alert, _ = TaskAlert.objects.get_or_create(
                 task=self,
                 alert_type=alert_type,
@@ -327,6 +349,8 @@ class TaskProgressUpdate(models.Model):
     event_type = models.CharField(max_length=40, default='note', db_index=True)
     previous_stage = models.CharField(max_length=20, blank=True)
     new_stage = models.CharField(max_length=20, blank=True)
+    previous_percentage = models.PositiveSmallIntegerField(null=True, blank=True)
+    new_percentage = models.PositiveSmallIntegerField(null=True, blank=True)
     reason = models.TextField(blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='task_progress_updates')
     created_at = models.DateTimeField(auto_now_add=True)

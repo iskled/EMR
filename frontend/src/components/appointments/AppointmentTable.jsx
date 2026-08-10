@@ -4,11 +4,9 @@ export default function AppointmentTable({
   appointments = [],
   loading = false,
   error = '',
-  onOpen,
   onEdit,
+  onDelete,
   onCancel,
-  onOpenClinical,
-  onBilling,
 }) {
   if (loading) {
     return (
@@ -59,13 +57,9 @@ export default function AppointmentTable({
                 {appointment.start_time} - {appointment.end_time}
               </td>
               <td className="px-4 py-3">
-                <button
-                  type="button"
-                  onClick={() => onOpen?.(appointment)}
-                  className="font-semibold text-blue-700 hover:underline"
-                >
+                <span className="font-semibold text-gray-900">
                   {appointment.patient_name}
-                </button>
+                </span>
                 <p className="text-xs text-gray-500">{appointment.patient_code}</p>
               </td>
               <td className="px-4 py-3">{appointment.dentist_name}</td>
@@ -88,13 +82,6 @@ export default function AppointmentTable({
                 <div className="flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => onOpen?.(appointment)}
-                    className="font-semibold text-blue-700 hover:underline"
-                  >
-                    Details
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => onEdit?.(appointment)}
                     className="font-semibold text-gray-700 hover:underline"
                   >
@@ -102,17 +89,10 @@ export default function AppointmentTable({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onOpenClinical?.(appointment)}
-                    className="font-semibold text-emerald-700 hover:underline"
+                    onClick={() => onDelete?.(appointment)}
+                    className="font-semibold text-red-700 hover:underline"
                   >
-                    Clinical
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onBilling?.(appointment)}
-                    className="font-semibold text-violet-700 hover:underline"
-                  >
-                    Billing
+                    Delete
                   </button>
                   <button
                     type="button"

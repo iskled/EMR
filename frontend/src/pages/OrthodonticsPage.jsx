@@ -201,7 +201,7 @@ export default function OrthodonticsPage() {
               <ClinicalIntegration
                 orthoCase={selectedCase}
                 onOpenPatient={() => navigate('/patients')}
-                onOpenAppointment={() => navigate('/appointments')}
+                onOpenAppointment={(orthoCase) => navigate(`/appointments?action=new&patient=${orthoCase.patient}&orthodontic_case=${orthoCase.id}&type=orthodontic-review`)}
               />
             </div>
           )}

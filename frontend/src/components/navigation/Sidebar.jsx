@@ -18,6 +18,7 @@ const menu = [
 ]
 
 const administrationMenu = [
+  { label: 'Dentist Accounts', path: '/staff/dentists', permission: 'dentists.manage' },
   { label: 'Users', path: '/administration/users', permission: 'users.manage' },
   { label: 'Security', path: '/security', permission: 'security.view' },
   { label: 'Audit Logs', path: '/audit', permission: 'audit.view' },

@@ -1,6 +1,14 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
+ORTHODONTIC_BASENAMES = {
+    'orthodontic-case',
+    'orthodontic-visit',
+    'orthodontic-photo',
+    'orthodontic-document',
+}
+
+
 class CanManageClinical(BasePermission):
     """
     Admin + dentist: full access.
@@ -23,8 +31,13 @@ class CanManageClinical(BasePermission):
                 'PATCH'
             )
 
+        if role == 'backoffice':
+            return request.method in SAFE_METHODS and getattr(view, 'basename', '') in ORTHODONTIC_BASENAMES
+
         if role == 'receptionist':
             return False
+
+        return False
 
 
 
@@ -47,6 +60,9 @@ class CanManageClinical(BasePermission):
 
         if role == 'assistant':
             return True
+
+        if role == 'backoffice':
+            return request.method in SAFE_METHODS and getattr(view, 'basename', '') in ORTHODONTIC_BASENAMES
 
         return False
 

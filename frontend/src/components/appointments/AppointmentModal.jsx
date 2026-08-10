@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import Input from '../ui/Input'
 import Select from '../ui/Select'
 import AvailableSlots from './AvailableSlots'
 import AppointmentConflictDialog from './AppointmentConflictDialog'
+import PatientSelector from '../tasks/PatientSelector'
 import {
   createAppointment,
   getAvailableSlots,
@@ -57,15 +58,19 @@ export default function AppointmentModal({
   appointment,
   patients = [],
   dentists = [],
+  clinicianLoading = false,
+  clinicianError = '',
+  onRetryClinicians,
   appointmentTypes = [],
   initialDate = '',
   initialTime = '',
   initialPatient = '',
   waitingEntry = null,
   reminderId = '',
+  initialAppointmentType = '',
+  orthodonticCaseId = '',
 }) {
   const [form, setForm] = useState(emptyForm)
-  const [patientSearch, setPatientSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [slotLoading, setSlotLoading] = useState(false)
   const [slots, setSlots] = useState(null)
@@ -94,7 +99,7 @@ export default function AppointmentModal({
           ...emptyForm,
           patient: waitingEntry?.patient || initialPatient || '',
           dentist: waitingEntry?.preferred_dentist || '',
-          appointment_type: waitingEntry?.appointment_type || '',
+          appointment_type: waitingEntry?.appointment_type || initialAppointmentType || '',
           scheduled_date: initialDate || '',
           start_time: initialTime || '',
           duration_minutes:
@@ -104,10 +109,9 @@ export default function AppointmentModal({
         }
 
     setForm(nextForm)
-    setPatientSearch('')
     setSlots(null)
     setErrors([])
-  }, [appointment, appointmentTypes, initialDate, initialTime, initialPatient, isOpen, waitingEntry])
+  }, [appointment, appointmentTypes, initialAppointmentType, initialDate, initialTime, initialPatient, isOpen, waitingEntry])
 
   useEffect(() => {
     const selectedType = appointmentTypes.find(
@@ -153,35 +157,17 @@ export default function AppointmentModal({
     }
   }, [form.dentist, form.scheduled_date, form.duration_minutes])
 
-  const patientOptions = useMemo(() => {
-    const term = patientSearch.toLowerCase().trim()
-    const filtered = patients
-      .filter(patient => {
-        if (!term) return true
-        return `${patient.full_name} ${patient.patient_code} ${patient.phone_primary}`
-          .toLowerCase()
-          .includes(term)
-      })
-      .slice(0, 30)
-
-    return [
-      { value: '', label: 'Select patient' },
-      ...filtered.map(patient => ({
-        value: patient.id,
-        label: `${patient.full_name} (${patient.patient_code})`,
-      })),
-    ]
-  }, [patients, patientSearch])
-
+  const activeDentistOptions = dentists.map(dentist => {
+    const name = dentist.full_name || `${dentist.first_name || ''} ${dentist.last_name || ''}`.trim() || dentist.email || `Dentist ${dentist.id}`
+    return { value: dentist.id, label: `Dr ${name}` }
+  })
+  const historicalDentist = isEditing && form.dentist && !dentists.some(dentist => String(dentist.id) === String(form.dentist))
+    ? { value: form.dentist, label: `Dr ${appointment?.dentist_name || 'Historical dentist'} — Inactive` }
+    : null
   const dentistOptions = [
-    { value: '', label: 'Select dentist' },
-    ...dentists.map(dentist => ({
-      value: dentist.id,
-      label:
-        dentist.first_name || dentist.last_name
-          ? `${dentist.first_name || ''} ${dentist.last_name || ''}`.trim()
-          : dentist.email,
-    })),
+    { value: '', label: clinicianLoading ? 'Loading dentists...' : 'Select dentist' },
+    ...(historicalDentist ? [historicalDentist] : []),
+    ...activeDentistOptions,
   ]
 
   const typeOptions = [
@@ -276,30 +262,26 @@ export default function AppointmentModal({
             Scheduling {waitingEntry.patient_name} from the waiting list.
           </div>
         )}
+        {orthodonticCaseId && <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-800">Orthodontic review context is attached to this booking workflow.</div>}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Input
-            label="Search patient"
-            value={patientSearch}
-            onChange={event => setPatientSearch(event.target.value)}
-            placeholder="Name, code, or phone"
-            disabled={isWaitingListSchedule}
-          />
-          <Select
-            label="Patient"
-            required
-            value={form.patient}
-            onChange={event => update('patient', event.target.value)}
-            options={patientOptions}
-            disabled={isWaitingListSchedule}
-          />
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-sm font-semibold text-gray-800">Patient <span className="text-red-600">*</span></label>
+            <PatientSelector value={form.patient} initialPatient={patients.find(patient => String(patient.id) === String(form.patient))} onChange={patient => update('patient', patient)} disabled={isWaitingListSchedule || loading} placeholder="Search by patient name, patient code, or phone number" />
+          </div>
           <Select
             label="Dentist"
             required
             value={form.dentist}
             onChange={event => update('dentist', event.target.value)}
             options={dentistOptions}
+            disabled={clinicianLoading || loading}
           />
+          <div className="md:col-span-2 -mt-2" aria-live="polite">
+            {clinicianLoading && <p className="text-sm text-gray-500">Loading dentists...</p>}
+            {!clinicianLoading && clinicianError && <div className="flex items-center gap-3 text-sm text-red-700"><span>Unable to load dentists.</span><button type="button" className="font-semibold underline" onClick={onRetryClinicians}>Retry</button></div>}
+            {!clinicianLoading && !clinicianError && dentists.length === 0 && <p className="text-sm text-amber-700">No active dentists are available for booking.</p>}
+          </div>
           <Select
             label="Appointment type"
             required

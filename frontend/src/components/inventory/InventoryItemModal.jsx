@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react'
 import Button from '../ui/Button'
 import Input from '../ui/Input'
 import Select from '../ui/Select'
-import { createInventoryItem, ITEM_TYPES, updateInventoryItem } from '../../services/inventory.service'
+import { createInventoryItem, updateInventoryItem } from '../../services/inventory.service'
 
 const empty = {
-  name: '', sku: '', category: '', item_type: 'consumable', unit_of_measure: 'unit',
+  name: '', sku: '', category: '', unit_of_measure: 'unit',
   description: '', default_supplier: '', storage_location: '', reorder_level: 0,
   target_stock_level: 0, unit_cost: 0, chargeable_cost: '', is_active: true,
 }
@@ -30,12 +30,13 @@ export default function InventoryItemModal({ open, item, categories = [], suppli
 
   async function submit(event) {
     event.preventDefault()
-    if (!form.name || !form.sku) {
-      setError('Name and SKU are required.')
+    if (!form.name || (!item && (!form.category || !form.default_supplier))) {
+      setError('Name, category, and default supplier are required.')
       return
     }
+    const { item_type: legacyItemType, ...visibleForm } = form
     const payload = {
-      ...form,
+      ...visibleForm,
       category: form.category || null,
       default_supplier: form.default_supplier || null,
       storage_location: form.storage_location || null,
@@ -65,10 +66,9 @@ export default function InventoryItemModal({ open, item, categories = [], suppli
         <form onSubmit={submit} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             <Input label="Name" value={form.name} onChange={e => update('name', e.target.value)} required />
-            <Input label="SKU/code" value={form.sku} onChange={e => update('sku', e.target.value)} required />
-            <Select label="Item type" value={form.item_type} onChange={e => update('item_type', e.target.value)} options={ITEM_TYPES} />
-            <Select label="Category" value={form.category || ''} onChange={e => update('category', e.target.value)} options={[{ value: '', label: 'No category' }, ...categories.map(x => ({ value: x.id, label: x.name }))]} />
-            <Select label="Default supplier" value={form.default_supplier || ''} onChange={e => update('default_supplier', e.target.value)} options={[{ value: '', label: 'No supplier' }, ...suppliers.map(x => ({ value: x.id, label: x.name }))]} />
+            <Input label="SKU/code" value={item ? form.sku : 'Generated automatically on save'} onChange={e => update('sku', e.target.value)} disabled={!item} />
+            <Select label="Category" value={form.category || ''} onChange={e => update('category', e.target.value)} options={[{ value: '', label: 'Select category' }, ...categories.map(x => ({ value: x.id, label: x.name }))]} required={!item} />
+            <Select label="Default supplier" value={form.default_supplier || ''} onChange={e => update('default_supplier', e.target.value)} options={[{ value: '', label: 'Select supplier' }, ...suppliers.map(x => ({ value: x.id, label: x.name }))]} required={!item} />
             <Select label="Storage location" value={form.storage_location || ''} onChange={e => update('storage_location', e.target.value)} options={[{ value: '', label: 'No location' }, ...locations.map(x => ({ value: x.id, label: x.name }))]} />
             <Input label="Unit of measure" value={form.unit_of_measure} onChange={e => update('unit_of_measure', e.target.value)} />
             <Input label="Reorder level" type="number" value={form.reorder_level} onChange={e => update('reorder_level', e.target.value)} />

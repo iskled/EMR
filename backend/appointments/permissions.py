@@ -8,15 +8,14 @@ def _role(user):
 class CanManageAppointments(BasePermission):
     """
     All authenticated staff can view and create appointments.
-    Only admin can delete.
+    Authenticated appointment staff may delete No Show appointments.
+    Additional delete restrictions are enforced by the view.
     Dentists see only their own appointments (enforced in queryset).
     """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
-        if request.method == 'DELETE':
-            return _role(request.user) == 'admin'
-        return _role(request.user) in ('admin', 'dentist', 'receptionist', 'assistant')
+        return _role(request.user) in ('admin', 'dentist', 'receptionist', 'assistant', 'nurse', 'backoffice')
 
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:
@@ -34,4 +33,4 @@ class CanManageWaitingList(BasePermission):
             return False
         if request.method == 'DELETE':
             return _role(request.user) in ('admin', 'receptionist')
-        return _role(request.user) in ('admin', 'dentist', 'receptionist', 'assistant')
+        return _role(request.user) in ('admin', 'dentist', 'receptionist', 'assistant', 'nurse', 'backoffice')

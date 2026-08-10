@@ -19,6 +19,8 @@ export default function AppointmentDrawer({
   onClinical,
   onBilling,
   onStatusChange,
+  onArchive,
+  onDelete,
   onEdit,
   patientHistory = [],
   orthodonticCase = null,
@@ -212,6 +214,22 @@ export default function AppointmentDrawer({
               >
                 Close
               </button>
+              {appointment.status === 'no_show' && <>
+                <button
+                  type="button"
+                  className="rounded-lg border border-amber-400 py-2 font-semibold text-amber-800 hover:bg-amber-50"
+                  onClick={() => onArchive?.(appointment)}
+                >
+                  Archive No Show
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-red-400 py-2 font-semibold text-red-700 hover:bg-red-50"
+                  onClick={() => onDelete?.(appointment)}
+                >
+                  Delete No Show
+                </button>
+              </>}
             </div>
           </section>
 

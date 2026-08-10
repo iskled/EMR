@@ -65,6 +65,9 @@ class CanManageTasks(BasePermission):
             }[action]
             if not is_admin(request.user) or not has_permission(request.user, permission):
                 self.message = f'You do not have permission to {action.replace("_", " ")} tasks.'
+                if action in {'update', 'partial_update'} and 'patient' in request.data:
+                    audit_event('task_patient_link_change_denied', 'Task', getattr(view, 'kwargs', {}).get('pk', ''),
+                                request=request, success=False, failure_reason='permission denied', source_module='tasks')
                 if action in {'create', 'claim', 'generate_next'}:
                     return deny_creation(request, 'Task', self.message)
                 return False
@@ -76,7 +79,7 @@ class CanManageTasks(BasePermission):
             return is_admin(request.user)
         if request.method in SAFE_METHODS:
             return user_can_see_task(request.user, task)
-        if getattr(view, 'action', None) == 'admin_override':
+        if getattr(view, 'action', None) in {'admin_override', 'dismiss'}:
             return is_admin(request.user)
         if getattr(view, 'action', None) in {'update', 'partial_update', 'destroy', 'reassign', 'claim', 'generate_next'}:
             return is_admin(request.user)

@@ -25,7 +25,7 @@ export default function StockReceiptModal({ open, item, suppliers = [], location
       <div className="mb-4 flex justify-between"><h2 className="text-xl font-bold">Receive Stock</h2><button onClick={onClose}>x</button></div>
       {error && <p className="mb-3 rounded bg-red-50 p-3 text-red-800">{error}</p>}
       <form onSubmit={submit} className="space-y-4">
-        <Input label="Batch/lot number" value={form.batch_number || ''} onChange={e => setForm({ ...form, batch_number: e.target.value })} required />
+        <Input label="Batch/lot number" value={form.batch_number || ''} onChange={e => setForm({ ...form, batch_number: e.target.value })} placeholder="Generated automatically on save" />
         <Input label="Quantity received" type="number" value={form.quantity || ''} onChange={e => setForm({ ...form, quantity: e.target.value })} required />
         <Select label="Supplier" value={form.supplier || ''} onChange={e => setForm({ ...form, supplier: e.target.value })} options={[{ value: '', label: 'No supplier' }, ...suppliers.map(x => ({ value: x.id, label: x.name }))]} />
         <Select label="Location" value={form.storage_location || ''} onChange={e => setForm({ ...form, storage_location: e.target.value })} options={[{ value: '', label: 'No location' }, ...locations.map(x => ({ value: x.id, label: x.name }))]} />

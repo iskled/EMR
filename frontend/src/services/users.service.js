@@ -5,6 +5,8 @@ export const USER_ROLES = [
   { value: 'dentist', label: 'Dentist' },
   { value: 'assistant', label: 'Assistant' },
   { value: 'receptionist', label: 'Receptionist' },
+  { value: 'nurse', label: 'Nurse' },
+  { value: 'backoffice', label: 'Backoffice Staff' },
 ]
 
 function unwrapList(data) {

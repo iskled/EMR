@@ -13,7 +13,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from .audit_service import audit_event
-from .models import AuditEvent, LoginAttempt, SecurityAlert, ClinicSettings
+from .models import AuditClearance, AuditEvent, LoginAttempt, SecurityAlert, ClinicSettings
 from .permissions import AdminOnlyPermission, has_permission, permission_matrix
 from .serializers import AuditEventSerializer, LoginAttemptSerializer, SecurityAlertSerializer, ClinicSettingsSerializer
 
@@ -44,6 +44,9 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         qs = AuditEvent.objects.select_related('user')
+        latest_clearance = AuditClearance.objects.order_by('-cleared_through').first()
+        if latest_clearance:
+            qs = qs.filter(timestamp__gt=latest_clearance.cleared_through)
         start = self.request.query_params.get('start_date')
         end = self.request.query_params.get('end_date')
         if start:
@@ -51,6 +54,20 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
         if end:
             qs = qs.filter(timestamp__date__lte=end)
         return qs
+
+    @action(detail=False, methods=['post'], url_path='clear')
+    def clear(self, request):
+        if request.data.get('confirmation') != 'CLEAR':
+            return Response({'confirmation': 'Enter CLEAR to clear all audit logs from the active view.'}, status=400)
+        event_count = self.get_queryset().count()
+        audit_event(
+            'audit_logs_cleared', 'AuditEvent', request=request, source_module='audit',
+            metadata={'cleared_event_count': event_count, 'retention': 'append_only'},
+        )
+        clearance = AuditClearance.objects.create(
+            cleared_through=timezone.now(), cleared_by=request.user, event_count=event_count,
+        )
+        return Response({'cleared': event_count, 'cleared_through': clearance.cleared_through})
 
     @action(detail=False, methods=['get'])
     def metrics(self, request):

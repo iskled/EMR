@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import DashboardHeader from "../components/dashboard/DashboardHeader";
 import DashboardMetrics from "../components/dashboard/DashboardMetrics";
@@ -7,16 +8,11 @@ import DashboardWidgetError from "../components/dashboard/DashboardWidgetError";
 import QuickActions from "../components/dashboard/QuickActions";
 import RoleDashboard from "../components/dashboard/RoleDashboard";
 import PatientIntakeModal from "../components/patients/PatientIntakeModal";
-import AppointmentModal from "../components/appointments/AppointmentModal";
 import StockUsageModal from "../components/inventory/StockUsageModal";
 import TaskModal from "../components/tasks/TaskModal";
 import { hasPermission } from "../permissions/permissions";
 import { getDashboard } from "../services/dashboard.service";
 import { getPatients } from "../services/patients.service";
-import {
-  getAppointmentTypes,
-  getDentists,
-} from "../services/appointments.service";
 import {
   getInventoryBatches,
   getInventoryItems,
@@ -30,6 +26,7 @@ const permissions = [
   "tasks.create",
 ];
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const { user, initializing = true } = useAuth() || {},
     [data, setData] = useState(null),
     [error, setError] = useState(false),
@@ -58,20 +55,22 @@ export default function DashboardPage() {
     if (!initializing && user) load();
   }, [initializing, user, load]);
   async function openAction(next) {
+    if (next === "appointment") {
+      navigate("/appointments?action=new");
+      return;
+    }
     setAction(next);
     try {
-      const [p, d, t, i, b, s] = await Promise.all([
+      const [p, i, b, s] = await Promise.all([
         getPatients(),
-        getDentists(),
-        getAppointmentTypes(),
         getInventoryItems(),
         getInventoryBatches(),
         getUsers(),
       ]);
       setRefs({
         patients: p.results || p || [],
-        dentists: d,
-        types: t,
+        dentists: [],
+        types: [],
         items: i.results || i || [],
         batches: b.results || b || [],
         staff: s.results || s || [],
@@ -118,17 +117,6 @@ export default function DashboardPage() {
           close();
           await load();
         }}
-      />
-      <AppointmentModal
-        isOpen={action === "appointment"}
-        onClose={close}
-        onSaved={async () => {
-          close();
-          await load();
-        }}
-        patients={refs.patients}
-        dentists={refs.dentists}
-        appointmentTypes={refs.types}
       />
       {action === "inventory" && (
           <StockUsageModal

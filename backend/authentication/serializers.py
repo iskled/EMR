@@ -35,6 +35,7 @@ class UserSerializer(serializers.ModelSerializer):
             'must_change_password',
             'locked_until',
             'effective_permissions',
+            'can_manage_dentists',
         ]
         read_only_fields = ['last_login', 'last_password_change', 'locked_until']
 
@@ -42,8 +43,62 @@ class UserSerializer(serializers.ModelSerializer):
         return obj.get_full_name() or obj.email
 
     def get_effective_permissions(self, obj):
-        from core.permissions import PERMISSIONS
-        return sorted(permission for permission, roles in PERMISSIONS.items() if obj.role in roles)
+        from core.permissions import PERMISSIONS, has_permission
+        return sorted(permission for permission in PERMISSIONS if has_permission(obj, permission))
+
+
+class ClinicianSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'role', 'is_active']
+        read_only_fields = fields
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.email
+
+
+class DentistAccountSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    temporary_password = serializers.CharField(write_only=True, required=False, min_length=10)
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'phone', 'specialization', 'license_number', 'role', 'is_active', 'last_login', 'date_joined', 'deactivated_at', 'deactivation_reason', 'archived_at', 'archive_reason', 'temporary_password']
+        read_only_fields = ['id', 'full_name', 'role', 'last_login', 'date_joined', 'deactivated_at', 'deactivation_reason', 'archived_at', 'archive_reason']
+        extra_kwargs = {'email': {'validators': []}}
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.email
+
+    def validate_email(self, value):
+        qs = User.objects.filter(email__iexact=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('An account already exists with this email address.')
+        return value
+
+    def create(self, validated_data):
+        password = validated_data.pop('temporary_password', None)
+        if not password:
+            raise serializers.ValidationError({'temporary_password': 'A secure temporary password is required.'})
+        validate_password(password)
+        user = User(role='dentist', must_change_password=True, **validated_data)
+        user.set_password(password)
+        user.last_password_change = timezone.now()
+        user.save()
+        PasswordHistory.objects.create(user=user, password_hash=user.password)
+        return user
+
+    def update(self, instance, validated_data):
+        validated_data.pop('temporary_password', None)
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.role = 'dentist'
+        instance.save()
+        return instance
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -179,6 +234,7 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
             'id', 'email', 'first_name', 'last_name', 'role', 'phone',
             'specialization', 'license_number', 'temporary_password',
             'force_password_change', 'is_active',
+            'can_manage_dentists',
         ]
         read_only_fields = ['id']
 
@@ -206,7 +262,14 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'first_name', 'last_name', 'role', 'phone', 'specialization',
             'license_number', 'is_active', 'force_password_change',
+            'can_manage_dentists',
         ]
+
+    def validate(self, attrs):
+        role = attrs.get('role', getattr(self.instance, 'role', None))
+        if role != 'nurse':
+            attrs['can_manage_dentists'] = False
+        return attrs
 
 
 class AdminPasswordResetSerializer(serializers.Serializer):
@@ -214,5 +277,11 @@ class AdminPasswordResetSerializer(serializers.Serializer):
     force_password_change = serializers.BooleanField(default=True)
 
     def validate_temporary_password(self, value):
-        validate_password(value)
+        user = self.context.get('user')
+        validate_password(value, user)
+        if user:
+            history_count = getattr(settings, 'SECURITY_PASSWORD_HISTORY_COUNT', 5)
+            for item in user.password_history.all()[:history_count]:
+                if check_password(value, item.password_hash):
+                    raise serializers.ValidationError('Choose a password that has not been used recently.')
         return value

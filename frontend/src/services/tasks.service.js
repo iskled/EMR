@@ -169,21 +169,6 @@ export async function addTaskComment(payload) {
   return response.data
 }
 
-export async function uploadTaskAttachment(payload) {
-  const formData = new FormData()
-  Object.entries(payload).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') formData.append(key, value)
-  })
-  const response = await api.post('/task-attachments/', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  return response.data
-}
-
-export async function archiveTaskAttachment(id, reason) {
-  const response = await api.post(`/task-attachments/${id}/archive/`, { reason })
-  return response.data
-}
 
 export async function createTaskDependency(payload) {
   const response = await api.post('/task-dependencies/', payload)

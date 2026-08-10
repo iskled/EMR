@@ -1,4 +1,4 @@
-const roles = ['admin', 'dentist', 'assistant', 'receptionist']
+const roles = ['admin', 'dentist', 'assistant', 'receptionist', 'nurse', 'backoffice']
 
 export default function RolePermissionMatrix({ permissions }) {
   return (

@@ -22,6 +22,15 @@ from .serializers import (
     PasswordChangeSerializer,
     UserSerializer
 )
+from .serializers import ClinicianSerializer, DentistAccountSerializer
+
+
+class CanManageDentists(permissions.BasePermission):
+    def has_permission(self, request, view):
+        allowed = has_permission(request.user, 'dentists.manage')
+        if not allowed and request.user.is_authenticated:
+            audit_event('dentist_management_denied', 'User', request=request, success=False, failure_reason='missing dentists.manage', source_module='authentication')
+        return allowed
 
 
 class RegisterView(generics.CreateAPIView):
@@ -84,14 +93,151 @@ class ProfileView(generics.RetrieveAPIView):
         return self.request.user
 
 class DentistListView(generics.ListAPIView):
-    serializer_class = UserSerializer
+    serializer_class = ClinicianSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return User.objects.filter(
             role='dentist',
             is_active=True
+        ).order_by('first_name', 'last_name', 'email')
+
+
+class DentistAccountViewSet(viewsets.ModelViewSet):
+    serializer_class = DentistAccountSerializer
+    permission_classes = [CanManageDentists]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['is_active']
+    search_fields = ['first_name', 'last_name', 'email', 'phone', 'license_number']
+    ordering = ['first_name', 'last_name', 'email']
+
+    def get_queryset(self):
+        qs = User.objects.filter(role='dentist')
+        archived = self.request.query_params.get('archived')
+        if archived == 'true':
+            return qs.filter(archived_at__isnull=False)
+        if archived != 'all':
+            qs = qs.filter(archived_at__isnull=True)
+        return qs
+
+    def _nurse_action_alert(self, action, dentist, metadata=None):
+        if getattr(self.request.user, 'role', None) != 'nurse':
+            return
+        security_alert(
+            'dentist_account_management',
+            f'Nurse {self.request.user.email} {action} dentist account {dentist.email}.',
+            user=dentist,
+            severity='medium',
+            source_module='authentication',
+            metadata={
+                'acting_user': self.request.user.email,
+                'acting_role': self.request.user.role,
+                'dentist_user_id': dentist.pk,
+                'dentist_full_name': dentist.get_full_name() or dentist.email,
+                'action': action,
+                **(metadata or {}),
+            },
         )
+
+    def perform_create(self, serializer):
+        dentist = serializer.save()
+        audit_event('dentist_created', 'User', dentist.pk, request=self.request, new_values=DentistAccountSerializer(dentist).data, source_module='authentication')
+        self._nurse_action_alert('created', dentist)
+
+    def perform_update(self, serializer):
+        previous = model_snapshot(serializer.instance)
+        dentist = serializer.save(role='dentist')
+        audit_event('dentist_edited', 'User', dentist.pk, request=self.request, previous_values=previous, new_values=DentistAccountSerializer(dentist).data, source_module='authentication')
+
+    def _dependencies(self, dentist):
+        from appointments.models import Appointment
+        from clinical.models import ClinicalNote, OrthodonticVisit, RecallSchedule, TreatmentPlan
+        from tasks.models import Task
+        return {
+            'appointments': Appointment.objects.filter(dentist=dentist).count(),
+            'clinical_notes': ClinicalNote.objects.filter(dentist=dentist).count(),
+            'orthodontic_visits': OrthodonticVisit.objects.filter(dentist=dentist).count(),
+            'treatment_plans': TreatmentPlan.objects.filter(dentist=dentist).count(),
+            'recalls': RecallSchedule.objects.filter(Q(clinical_note__dentist=dentist) | Q(linked_appointment__dentist=dentist)).distinct().count(),
+            'tasks': Task.objects.filter(Q(assigned_user=dentist) | Q(created_by=dentist)).distinct().count(),
+            'audit_events': AuditEvent.objects.filter(Q(user=dentist) | Q(resource_type='User', resource_id=str(dentist.pk))).count(),
+        }
+
+    @action(detail=True, methods=['get'])
+    def dependencies(self, request, pk=None):
+        dentist = self.get_object()
+        counts = self._dependencies(dentist)
+        return Response({'counts': counts, 'has_dependencies': any(counts.values())})
+
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        dentist = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'reason': 'A deactivation reason is required.'}, status=400)
+        previous = model_snapshot(dentist)
+        dentist.is_active = False
+        dentist.deactivated_at = timezone.now()
+        dentist.deactivated_by = request.user
+        dentist.deactivation_reason = reason
+        dentist.save(update_fields=['is_active', 'deactivated_at', 'deactivated_by', 'deactivation_reason'])
+        for token in OutstandingToken.objects.filter(user=dentist):
+            BlacklistedToken.objects.get_or_create(token=token)
+        audit_event('dentist_deactivated', 'User', dentist.pk, request=request, previous_values=previous, new_values=DentistAccountSerializer(dentist).data, source_module='authentication', metadata={'reason': reason})
+        self._nurse_action_alert('deactivated', dentist, {'reason': reason})
+        return Response(DentistAccountSerializer(dentist).data)
+
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        dentist = self.get_object()
+        previous = model_snapshot(dentist)
+        dentist.is_active = True
+        dentist.deactivated_at = None
+        dentist.deactivated_by = None
+        dentist.deactivation_reason = ''
+        dentist.archived_at = None
+        dentist.archived_by = None
+        dentist.archive_reason = ''
+        dentist.save()
+        audit_event('dentist_reactivated', 'User', dentist.pk, request=request, previous_values=previous, new_values=DentistAccountSerializer(dentist).data, source_module='authentication', metadata={'reason': request.data.get('reason', '')})
+        self._nurse_action_alert('reactivated', dentist, {'reason': request.data.get('reason', '')})
+        return Response(DentistAccountSerializer(dentist).data)
+
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk=None):
+        dentist = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'reason': 'An archive reason is required.'}, status=400)
+        dentist.is_active = False
+        dentist.archived_at = timezone.now()
+        dentist.archived_by = request.user
+        dentist.archive_reason = reason
+        dentist.save(update_fields=['is_active', 'archived_at', 'archived_by', 'archive_reason'])
+        for token in OutstandingToken.objects.filter(user=dentist):
+            BlacklistedToken.objects.get_or_create(token=token)
+        audit_event('dentist_archived', 'User', dentist.pk, request=request, source_module='authentication', metadata={'reason': reason, 'dependencies': self._dependencies(dentist)})
+        self._nurse_action_alert('archived', dentist, {'reason': reason, 'dependencies': self._dependencies(dentist)})
+        return Response(DentistAccountSerializer(dentist).data)
+
+    @action(detail=True, methods=['post'], url_path='reset-password')
+    def reset_password(self, request, pk=None):
+        dentist = self.get_object()
+        serializer = AdminPasswordResetSerializer(data=request.data, context={'user': dentist})
+        serializer.is_valid(raise_exception=True)
+        dentist.set_password(serializer.validated_data['temporary_password'])
+        dentist.must_change_password = True
+        dentist.last_password_change = timezone.now()
+        dentist.save(update_fields=['password', 'must_change_password', 'last_password_change'])
+        PasswordHistory.objects.create(user=dentist, password_hash=dentist.password)
+        for token in OutstandingToken.objects.filter(user=dentist):
+            BlacklistedToken.objects.get_or_create(token=token)
+        audit_event('dentist_password_reset', 'User', dentist.pk, request=request, source_module='authentication')
+        return Response({'detail': 'Temporary access reset. Password change is required at next login.'})
+
+    def destroy(self, request, *args, **kwargs):
+        dentist = self.get_object()
+        return Response({'detail': 'Permanent deletion is disabled. Archive the dentist account instead.', 'dependencies': self._dependencies(dentist)}, status=409)
 
 
 class AdminUserViewSet(viewsets.ModelViewSet):

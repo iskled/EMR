@@ -1,9 +1,11 @@
 from datetime import date, timedelta
+from uuid import uuid4
 
 from django.db import transaction
 from django.db.models import Sum, F
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.exceptions import ValidationError
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -35,6 +37,7 @@ from .serializers import (
     StockReceiptSerializer,
     StockTransferSerializer,
     StockUsageSerializer,
+    BulkStockUsageSerializer,
     SupplierSerializer,
 )
 
@@ -125,9 +128,52 @@ class InventoryItemViewSet(AuditLogMixin, viewsets.ModelViewSet):
         self.inventory_action = 'usage'
         serializer = StockUsageSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        batches = serializer.save()
-        audit_event('inventory_usage', 'InventoryBatch', ','.join(str(batch.pk) for batch in batches), request=request, source_module='inventory', metadata={'batch_count': len(batches)})
+        try:
+            batches = serializer.save()
+        except ValidationError as exc:
+            audit_event('inventory_usage_failed', 'InventoryItem', request.data.get('item', ''), request=request, patient_id=request.data.get('patient') or request.data.get('patient_id') or '', success=False, failure_reason=str(exc.detail)[:255], source_module='inventory')
+            raise
+        audit_event('inventory_usage', 'InventoryBatch', ','.join(str(batch.pk) for batch in batches), request=request, patient_id=request.data.get('patient') or request.data.get('patient_id') or '', source_module='inventory', metadata={'batch_count': len(batches)})
         return Response(InventoryBatchSerializer(batches, many=True).data)
+
+    @action(detail=False, methods=['post'], url_path='usage/bulk')
+    def bulk_usage(self, request):
+        serializer = BulkStockUsageSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        correlation = str(uuid4())
+        try:
+            result = serializer.save(correlation_id=correlation)
+        except ValidationError as exc:
+            audit_event('inventory_bulk_usage_failed', 'InventoryUsageBatch', correlation, request=request, patient_id=request.data.get('patient', ''), success=False, failure_reason=str(exc.detail)[:255], source_module='inventory', metadata={'items': request.data.get('items', [])})
+            raise
+        patient = result['patient']
+        movements = result['movements']
+        audit_event(
+            'inventory_bulk_usage',
+            'InventoryUsageBatch',
+            correlation,
+            request=request,
+            patient_id=patient.pk,
+            source_module='inventory',
+            metadata={
+                'usage_count': result['usage_count'],
+                'items': [
+                    {'item': movement.item_id, 'quantity': str(abs(movement.quantity))}
+                    for movement in movements
+                ],
+            },
+        )
+        return Response({
+            'patient': {
+                'id': str(patient.pk),
+                'full_name': patient.full_name,
+                'patient_code': patient.patient_code,
+                'phone_primary': patient.phone_primary,
+            },
+            'usage_count': result['usage_count'],
+            'correlation_id': correlation,
+            'movements': StockMovementSerializer(movements, many=True).data,
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'], permission_classes=[CanDestructivelyAdjustInventory])
     def adjustment(self, request):
@@ -163,12 +209,12 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [CanManageInventory]
     serializer_class = StockMovementSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['item', 'batch', 'location', 'movement_type']
-    search_fields = ['notes', 'item__name', 'item__sku', 'batch__batch_number']
+    filterset_fields = ['item', 'batch', 'location', 'movement_type', 'patient']
+    search_fields = ['notes', 'item__name', 'item__sku', 'batch__batch_number', 'patient__first_name', 'patient__last_name', 'patient__patient_code']
     ordering = ['-created_at']
 
     def get_queryset(self):
-        return StockMovement.objects.select_related('item', 'batch', 'location', 'user')
+        return StockMovement.objects.select_related('item', 'batch', 'location', 'user', 'patient')
 
 
 class PurchaseOrderViewSet(AuditLogMixin, viewsets.ModelViewSet):
@@ -204,7 +250,7 @@ class PurchaseOrderViewSet(AuditLogMixin, viewsets.ModelViewSet):
             remaining = line.quantity_ordered - line.quantity_received
             if remaining <= 0:
                 continue
-            batch_number = request.data.get('batch_number') or f'PO-{order.pk}-{line.item.sku}'
+            batch_number = request.data.get('batch_number') or ''
             batch = receive_stock(
                 item=line.item,
                 batch_number=batch_number,

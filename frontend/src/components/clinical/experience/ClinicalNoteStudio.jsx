@@ -2,7 +2,7 @@ import {useEffect,useState} from 'react'
 import {createClinicalNote} from '../../../services/clinical.service'
 import {getDentists} from '../../../services/appointments.service'
 
-const initial=()=>({dentist:'',note_type:'treatment',note_date:new Date().toISOString().slice(0,10),chief_complaint:'',clinical_findings:'',diagnosis:'',treatment_planned:'',treatment_performed:'',materials_used:'',anesthesia_type:'',next_visit_instructions:'',notes:'',medical_dental_history:'',family_social_history:'',general_examination:'',orofacial_examination:'',treatment_scope:'general',tooth_numbers:[]})
+const initial=()=>({dentist:'',note_type:'treatment',note_date:new Date().toISOString().slice(0,10),chief_complaint:'',clinical_findings:'',diagnosis:'',treatment_planned:'',treatment_performed:'',materials_used:'',anesthesia_type:'',next_visit_instructions:'',notes:'',medical_dental_history:'',family_social_history:'',general_examination:'',orofacial_examination:'',treatment_scope:'whole_mouth',tooth_numbers:[]})
 const sections=[
  ['Chief Complaint','What brought the patient in?','chief_complaint',true],
  ['Assessment','Record examination findings','clinical_findings',true],

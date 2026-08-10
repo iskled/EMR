@@ -18,6 +18,8 @@ import {
   getDentists,
   getWaitingList,
   updateAppointmentStatus,
+  archiveAppointment,
+  deleteAppointment,
   transitionReminder,
 } from "../services/appointments.service";
 import { getOrthodonticCases } from "../services/orthodontics.service";
@@ -42,9 +44,13 @@ export default function AppointmentsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialPatient = searchParams.get("patient") || "";
+  const initialOrthodonticCase = searchParams.get("orthodontic_case") || "";
+  const initialTypeSlug = searchParams.get("type") || "";
   const [appointments, setAppointments] = useState([]);
   const [patients, setPatients] = useState([]);
   const [dentists, setDentists] = useState([]);
+  const [clinicianLoading, setClinicianLoading] = useState(false);
+  const [clinicianError, setClinicianError] = useState("");
   const [appointmentTypes, setAppointmentTypes] = useState([]);
   const [waitingList, setWaitingList] = useState([]);
   const [orthodonticCases, setOrthodonticCases] = useState([]);
@@ -62,6 +68,8 @@ export default function AppointmentsPage() {
   const [editingAppointment, setEditingAppointment] = useState(null);
   const [slotSeed, setSlotSeed] = useState(null);
   const [waitingEntry, setWaitingEntry] = useState(null);
+  const [appointmentToDelete, setAppointmentToDelete] = useState(null);
+  const [deletingAppointment, setDeletingAppointment] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState("schedule");
 
   const filteredAppointments = useMemo(
@@ -83,8 +91,9 @@ export default function AppointmentsPage() {
 
   useEffect(() => {
     loadReferenceData();
+    loadClinicians();
     loadWaitingList();
-    if (searchParams.get("action") === "new" && initialPatient)
+    if (searchParams.get("action") === "new")
       openNewAppointment({ date: toDateKey(new Date()), time: "08:00" });
   }, []);
 
@@ -98,18 +107,29 @@ export default function AppointmentsPage() {
 
   async function loadReferenceData() {
     try {
-      const [typeData, dentistData, patientData] = await Promise.all([
+      const [typesResult, patientsResult, orthoResult] = await Promise.allSettled([
         getAppointmentTypes(),
-        getDentists(),
         getPatients({ page: 1 }),
+        getOrthodonticCases(),
       ]);
-      setAppointmentTypes(typeData);
-      setDentists(dentistData);
-      setPatients(patientData.results || patientData);
-      const orthoData = await getOrthodonticCases();
-      setOrthodonticCases(orthoData);
+      if (typesResult.status === "fulfilled") setAppointmentTypes(typesResult.value);
+      if (patientsResult.status === "fulfilled") setPatients(patientsResult.value.results || patientsResult.value);
+      if (orthoResult.status === "fulfilled") setOrthodonticCases(orthoResult.value);
+      if ([typesResult, patientsResult].some(result => result.status === "rejected")) setNotice("Some appointment reference data could not be loaded. Retry the affected section.");
     } catch (loadError) {
       setNotice("Reference data could not be loaded.");
+    }
+  }
+
+  async function loadClinicians() {
+    try {
+      setClinicianLoading(true);
+      setClinicianError("");
+      setDentists(await getDentists());
+    } catch {
+      setClinicianError("Unable to load dentists.");
+    } finally {
+      setClinicianLoading(false);
     }
   }
 
@@ -213,6 +233,38 @@ export default function AppointmentsPage() {
     setNotice(`Appointment marked ${status.replace("_", " ")}.`);
   }
 
+  async function handleArchiveAppointment(appointment) {
+    const reason = window.prompt('Optional archive reason:')
+    if (reason === null) return
+    await archiveAppointment(appointment.id, reason.trim())
+    setDrawerOpen(false)
+    setSelectedAppointment(null)
+    await refreshAll()
+    setNotice('Appointment archived.')
+  }
+
+  function handleDeleteAppointment(appointment) {
+    setAppointmentToDelete(appointment);
+  }
+
+  async function confirmDeleteAppointment() {
+    if (!appointmentToDelete || deletingAppointment) return;
+
+    try {
+      setDeletingAppointment(true);
+      await deleteAppointment(appointmentToDelete.id);
+      setAppointmentToDelete(null);
+      setDrawerOpen(false);
+      setSelectedAppointment(null);
+      await refreshAll();
+      setNotice("The appointment has been permanently deleted.");
+    } catch {
+      setNotice("The appointment could not be deleted. Please try again.");
+    } finally {
+      setDeletingAppointment(false);
+    }
+  }
+
   function handleCancel(appointment) {
     openAppointment(appointment);
     setNotice(
@@ -259,6 +311,53 @@ export default function AppointmentsPage() {
         </div>
       )}
 
+      {appointmentToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-appointment-title"
+            aria-describedby="delete-appointment-description"
+            className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"
+          >
+            <h2
+              id="delete-appointment-title"
+              className="text-xl font-bold text-gray-900"
+            >
+              Delete appointment?
+            </h2>
+            <p
+              id="delete-appointment-description"
+              className="mt-2 text-sm text-gray-600"
+            >
+              This appointment will be permanently removed. This action cannot
+              be reversed.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={deletingAppointment}
+                onClick={() => setAppointmentToDelete(null)}
+                className="rounded-lg border border-gray-300 px-4 py-2 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Keep appointment
+              </button>
+              <button
+                type="button"
+                disabled={deletingAppointment}
+                onClick={confirmDeleteAppointment}
+                className="rounded-lg bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deletingAppointment ? "Deleting..." : "Delete appointment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <nav className="flex gap-2 rounded-xl border bg-white p-2">
         {["schedule", "calendar", "waiting list", "reminders"].map((tab) => (
           <button
@@ -285,7 +384,7 @@ export default function AppointmentsPage() {
         />
       ) : (
         <>
-          <AppointmentToolbar
+          {workspaceTab !== "waiting list" && <AppointmentToolbar
             onNew={() =>
               openNewAppointment({
                 date: toDateKey(selectedDate),
@@ -295,25 +394,25 @@ export default function AppointmentsPage() {
             onRefresh={refreshAll}
             loading={loading}
             lastUpdated={lastUpdated}
-          />
+          />}
 
-          <AppointmentMetrics
+          {workspaceTab === "schedule" && <AppointmentMetrics
             appointments={selectedDayAppointments}
             dentists={dentists}
             selectedDate={filters.scheduled_date || toDateKey(selectedDate)}
-          />
+          />}
 
-          <AppointmentFilters
+          {workspaceTab !== "waiting list" && <AppointmentFilters
             filters={filters}
             dentists={dentists}
             appointmentTypes={appointmentTypes}
             onChange={handleFilterChange}
             onReset={resetFilters}
-          />
+          />}
 
-          <div className="grid grid-cols-1 2xl:grid-cols-[1fr_360px] gap-6">
+          <div className={workspaceTab === "waiting list" ? "block" : "grid grid-cols-1 gap-6"}>
             <div className="space-y-6">
-              <AppointmentCalendar
+              {workspaceTab === "calendar" && <AppointmentCalendar
                 appointments={filteredAppointments}
                 selectedDate={selectedDate}
                 view={calendarView}
@@ -321,26 +420,24 @@ export default function AppointmentsPage() {
                 onDateChange={handleDateChange}
                 onAppointmentClick={openAppointment}
                 onSlotClick={openNewAppointment}
-              />
+              />}
 
-              <AppointmentTable
+              {workspaceTab === "schedule" && <AppointmentTable
                 appointments={filteredAppointments}
                 loading={loading}
                 error={error}
-                onOpen={openAppointment}
                 onEdit={openEditAppointment}
+                onDelete={handleDeleteAppointment}
                 onCancel={handleCancel}
-                onOpenClinical={openClinical}
-                onBilling={openBilling}
-              />
+              />}
             </div>
 
-            <WaitingListPanel
+            {workspaceTab === "waiting list" && <WaitingListPanel
               entries={waitingList}
               loading={waitingLoading}
               onSchedule={openWaitingEntry}
               onRefresh={loadWaitingList}
-            />
+            />}
           </div>
         </>
       )}
@@ -351,11 +448,16 @@ export default function AppointmentsPage() {
         waitingEntry={waitingEntry}
         patients={patients}
         dentists={dentists}
+        clinicianLoading={clinicianLoading}
+        clinicianError={clinicianError}
+        onRetryClinicians={loadClinicians}
         appointmentTypes={appointmentTypes}
         initialDate={slotSeed?.date || toDateKey(selectedDate)}
         initialTime={slotSeed?.time || "08:00"}
         initialPatient={slotSeed?.patient || initialPatient}
         reminderId={slotSeed?.recall || ""}
+        initialAppointmentType={appointmentTypes.find(type => type.slug === initialTypeSlug)?.id || ""}
+        orthodonticCaseId={initialOrthodonticCase}
         onClose={() => {
           setModalOpen(false);
           setEditingAppointment(null);
@@ -378,6 +480,8 @@ export default function AppointmentsPage() {
         onBilling={openBilling}
         onEdit={openEditAppointment}
         onStatusChange={handleStatusChange}
+        onArchive={handleArchiveAppointment}
+        onDelete={handleDeleteAppointment}
       />
     </div>
   );

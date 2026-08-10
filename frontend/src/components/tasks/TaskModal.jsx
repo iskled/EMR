@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { STAFF_ROLES, TASK_PRIORITIES, TASK_STATUSES, TASK_TYPES } from '../../services/tasks.service'
 import RecurrenceEditor from './RecurrenceEditor'
+import PatientSelector from './PatientSelector'
 
 const emptyForm = {
   title: '',
@@ -127,7 +128,7 @@ function buildPayload(form, canAssign) {
   })
 
   linkedRecordFields.forEach(key => {
-    payload[key] = form[key] ? Number(form[key]) : null
+    payload[key] = form[key] ? (key === 'patient' ? form[key] : Number(form[key])) : null
   })
 
   if (payload.recurrence === 'none') {
@@ -146,19 +147,19 @@ function buildPayload(form, canAssign) {
   return payload
 }
 
-export default function TaskModal({ task, staff, onClose, onSave, canAssign = true }) {
-  const [form, setForm] = useState(normalizeTask(task))
+export default function TaskModal({ task, staff, onClose, onSave, canAssign = true, initialPatientId = '' }) {
+  const [form, setForm] = useState(() => ({ ...normalizeTask(task), patient: task?.patient || initialPatientId || '' }))
   const [fieldErrors, setFieldErrors] = useState({})
   const [formError, setFormError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [staffSearch, setStaffSearch] = useState('')
 
   useEffect(() => {
-    setForm(normalizeTask(task))
+    setForm({ ...normalizeTask(task), patient: task?.patient || initialPatientId || '' })
     setFieldErrors({})
     setFormError('')
     setIsSubmitting(false)
-  }, [task])
+  }, [task, initialPatientId])
 
   const update = event => {
     const { name, value } = event.target
@@ -324,8 +325,8 @@ export default function TaskModal({ task, staff, onClose, onSave, canAssign = tr
         <section className="mt-6">
           <h3 className="text-sm font-bold uppercase tracking-wide text-gray-600">Linked Records</h3>
           <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <Field label="Patient ID" error={fieldErrors.patient}>
-              <input name="patient" type="number" min="1" value={form.patient || ''} onChange={update} className={inputClass} disabled={isSubmitting} />
+            <Field label="Patient" error={fieldErrors.patient} className="md:col-span-2 xl:col-span-3">
+              <PatientSelector value={form.patient} initialPatient={task?.patient_detail} onChange={patient => setForm(current => ({ ...current, patient }))} disabled={isSubmitting} />
             </Field>
             <Field label="Appointment ID" error={fieldErrors.appointment}>
               <input name="appointment" type="number" min="1" value={form.appointment || ''} onChange={update} className={inputClass} disabled={isSubmitting} />

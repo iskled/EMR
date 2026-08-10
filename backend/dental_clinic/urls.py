@@ -2,6 +2,11 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import HttpResponseNotFound
+
+
+def deny_task_media(request, path):
+    return HttpResponseNotFound()
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -17,9 +22,11 @@ urlpatterns = [
     path('api/', include('reports.urls')),
     path('api/', include('tasks.urls')),
     path('api/', include('core.urls')),
+    # Task attachments are delivered only by authenticated API actions.
+    path('media/tasks/<path:path>', deny_task_media),
     
 
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+]
 
 if settings.DEBUG:
     urlpatterns += static(

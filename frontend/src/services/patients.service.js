@@ -1,5 +1,10 @@
 import api from '../api/axios'
 
+export async function searchPatients(q) {
+  const response = await api.get('/patients/search/', { params: { q } })
+  return response.data?.results || []
+}
+
 /**
  * Get Patients
  */

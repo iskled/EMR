@@ -20,7 +20,14 @@ export default function ProtectedRoute({ children, permission }) {
   }
 
   if (permission && !hasPermission(user, permission)) {
-    return <Navigate to="/dashboard" replace />
+    return (
+      <DashboardLayout>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-amber-900">
+          <h1 className="text-2xl font-bold">Access Denied</h1>
+          <p className="mt-2 text-sm">You do not have permission to open this workspace.</p>
+        </div>
+      </DashboardLayout>
+    )
   }
 
   return (

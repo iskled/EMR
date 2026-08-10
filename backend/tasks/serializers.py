@@ -132,27 +132,35 @@ class TaskCommentSerializer(serializers.ModelSerializer):
 
 class TaskAttachmentSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.SerializerMethodField()
-    file_url = serializers.SerializerMethodField()
+    preview_url = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
 
     class Meta:
         model = TaskAttachment
         fields = [
-            'id', 'task', 'progress_update', 'file', 'file_url', 'title', 'caption',
+            'id', 'task', 'progress_update', 'file', 'preview_url', 'download_url', 'title', 'caption',
             'original_filename', 'mime_type', 'file_size', 'uploaded_by', 'uploaded_by_name',
             'archived_by', 'archived_at', 'archive_reason', 'created_at',
         ]
         read_only_fields = [
             'uploaded_by', 'uploaded_by_name', 'original_filename', 'mime_type', 'file_size',
-            'archived_by', 'archived_at', 'archive_reason', 'created_at', 'file_url',
+            'archived_by', 'archived_at', 'archive_reason', 'created_at', 'preview_url', 'download_url',
         ]
+        extra_kwargs = {'file': {'write_only': True}}
 
     def get_uploaded_by_name(self, obj):
         return obj.uploaded_by.get_full_name() or obj.uploaded_by.email if obj.uploaded_by else ''
 
-    def get_file_url(self, obj):
+    def _url(self, obj, action):
         request = self.context.get('request')
-        url = f'/api/task-attachments/{obj.pk}/download/'
+        url = f'/api/task-attachments/{obj.pk}/{action}/'
         return request.build_absolute_uri(url) if request else url
+
+    def get_preview_url(self, obj):
+        return self._url(obj, 'preview')
+
+    def get_download_url(self, obj):
+        return self._url(obj, 'download')
 
     def validate_file(self, file_obj):
         max_size = getattr(settings, 'TASK_ATTACHMENT_MAX_SIZE', getattr(settings, 'PATIENT_DOCUMENT_MAX_SIZE', 10 * 1024 * 1024))
@@ -226,16 +234,17 @@ class TaskNotificationSerializer(serializers.ModelSerializer):
 
 class TaskProgressUpdateSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
-    attachments = TaskAttachmentSerializer(many=True, read_only=True)
+    created_by_role = serializers.CharField(source='created_by.role', read_only=True)
 
     class Meta:
         model = TaskProgressUpdate
         fields = [
             'id', 'task', 'note', 'percentage', 'status_at_time',
             'event_type', 'previous_stage', 'new_stage', 'reason',
-            'created_by', 'created_by_name', 'created_at', 'attachments',
+            'previous_percentage', 'new_percentage',
+            'created_by', 'created_by_name', 'created_by_role', 'created_at',
         ]
-        read_only_fields = ['created_by', 'created_at', 'status_at_time', 'event_type', 'previous_stage', 'new_stage', 'reason', 'attachments']
+        read_only_fields = ['created_by', 'created_at', 'status_at_time', 'event_type', 'previous_stage', 'new_stage', 'reason', 'percentage', 'previous_percentage', 'new_percentage']
 
     def get_created_by_name(self, obj):
         return obj.created_by.get_full_name() or obj.created_by.email if obj.created_by else ''
@@ -277,6 +286,7 @@ class TaskSerializer(serializers.ModelSerializer):
     assigned_user_display = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     patient_name = serializers.SerializerMethodField()
+    patient_detail = serializers.SerializerMethodField()
     appointment_label = serializers.SerializerMethodField()
     orthodontic_case_label = serializers.SerializerMethodField()
     inventory_item_name = serializers.SerializerMethodField()
@@ -286,7 +296,6 @@ class TaskSerializer(serializers.ModelSerializer):
     alerts = TaskAlertSerializer(many=True, read_only=True)
     notifications = TaskNotificationSerializer(many=True, read_only=True)
     progress_updates = TaskProgressUpdateSerializer(many=True, read_only=True)
-    attachments = TaskAttachmentSerializer(many=True, read_only=True)
     assignment_history = TaskAssignmentHistorySerializer(many=True, read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
 
@@ -304,16 +313,16 @@ class TaskSerializer(serializers.ModelSerializer):
             'blocked_resolution_date', 'completion_summary',
             'recurrence', 'recurrence_interval', 'recurrence_weekdays',
             'recurrence_end_date', 'last_generated_at', 'parent_task', 'patient',
-            'patient_name', 'appointment', 'appointment_label', 'orthodontic_case',
+            'patient_name', 'patient_detail', 'appointment', 'appointment_label', 'orthodontic_case',
             'orthodontic_case_label', 'orthodontic_visit', 'inventory_item',
             'inventory_item_name', 'inventory_alert', 'tags', 'created_at', 'updated_at',
             'is_overdue', 'checklist_items', 'dependencies', 'comments', 'alerts', 'notifications',
-            'progress_updates', 'attachments', 'assignment_history',
+            'progress_updates', 'assignment_history',
         ]
         read_only_fields = [
             'created_by', 'completed_at', 'completed_by', 'accepted_at', 'accepted_by',
             'started_at', 'started_by', 'declined_at', 'declined_by',
-            'last_generated_at', 'created_at', 'updated_at',
+            'progress_percentage', 'last_generated_at', 'created_at', 'updated_at',
         ]
 
     def get_assigned_user_name(self, obj):
@@ -337,6 +346,12 @@ class TaskSerializer(serializers.ModelSerializer):
     def get_patient_name(self, obj):
         return obj.patient.full_name if obj.patient else ''
 
+    def get_patient_detail(self, obj):
+        if not obj.patient:
+            return None
+        return {'id': str(obj.patient_id), 'patient_code': obj.patient.patient_code,
+                'full_name': obj.patient.full_name, 'phone': obj.patient.phone_primary or obj.patient.phone_secondary or ''}
+
     def get_appointment_label(self, obj):
         if not obj.appointment:
             return ''
@@ -359,7 +374,6 @@ class TaskSerializer(serializers.ModelSerializer):
         recurrence = attrs.get('recurrence', self.instance.recurrence if self.instance else 'none')
         recurrence_interval = attrs.get('recurrence_interval', self.instance.recurrence_interval if self.instance else None)
         recurrence_end_date = attrs.get('recurrence_end_date', self.instance.recurrence_end_date if self.instance else None)
-        progress_percentage = attrs.get('progress_percentage', self.instance.progress_percentage if self.instance else None)
         errors = {}
 
         if assigned_role is None:
@@ -370,7 +384,7 @@ class TaskSerializer(serializers.ModelSerializer):
             errors['assigned_role'] = 'Assign to either a user or a role, not both.'
         if assigned_user and not assigned_user.is_active:
             errors['assigned_user'] = 'The selected assignee is inactive.'
-        if assigned_role and assigned_role not in {'admin', 'dentist', 'assistant', 'receptionist'}:
+        if assigned_role and assigned_role not in {'admin', 'dentist', 'assistant', 'receptionist', 'nurse', 'backoffice'}:
             errors['assigned_role'] = 'Select a valid assignment role.'
         if status and status not in dict(Task.STATUS_CHOICES):
             errors['status'] = 'Select a valid task status.'
@@ -386,8 +400,6 @@ class TaskSerializer(serializers.ModelSerializer):
                 errors['recurrence_interval'] = 'Repeat interval must be at least 1.'
             if recurrence_end_date and due_date and recurrence_end_date < due_date:
                 errors['recurrence_end_date'] = 'Repeat until cannot be earlier than the due date.'
-        if progress_percentage is not None and (progress_percentage < 0 or progress_percentage > 100):
-            errors['progress_percentage'] = 'Progress percentage must be between 0 and 100.'
         if errors:
             raise serializers.ValidationError(errors)
 
@@ -397,12 +409,12 @@ class TaskSerializer(serializers.ModelSerializer):
                 f"Cannot change task status from {self.instance.get_status_display()} to {dict(Task.STATUS_CHOICES).get(status, status)}."
             )
         if status == 'completed' and self.instance and not self.instance.can_complete():
-            raise serializers.ValidationError('Required checklist items and dependencies must be completed first.')
+            raise serializers.ValidationError('Task dependencies must be completed first.')
         if self.instance and request and not has_permission(request.user, 'tasks.assign'):
-            protected = {'assigned_user', 'assigned_role', 'recurrence', 'recurrence_interval', 'recurrence_weekdays', 'recurrence_end_date', 'parent_task'}
+            protected = {'assigned_user', 'assigned_role', 'recurrence', 'recurrence_interval', 'recurrence_weekdays', 'recurrence_end_date', 'parent_task', 'patient'}
             submitted_fields = set(getattr(self, 'initial_data', {}).keys())
             if protected.intersection(submitted_fields):
-                raise PermissionDenied('You do not have permission to change task assignment or recurrence.')
+                raise PermissionDenied('You do not have permission to change task assignment, recurrence, or patient links.')
         return attrs
 
     def update(self, instance, validated_data):

@@ -1,357 +1,96 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import AssignmentPanel from './AssignmentPanel'
 import ChecklistPanel from './ChecklistPanel'
 import DependencyPanel from './DependencyPanel'
 import TaskActivityTimeline from './TaskActivityTimeline'
 import TaskComments from './TaskComments'
 
-const allowedUploadTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
-const maxUploadSize = 10 * 1024 * 1024
+export const TASK_PATH = [
+  ['pending_acceptance', 'Pending Acceptance', 0], ['accepted', 'Accepted', 25],
+  ['in_progress', 'In Progress', 50], ['waiting_for_vendor', 'Waiting for Vendor', 50],
+  ['waiting_for_staff', 'Waiting for Staff', 50], ['resolved', 'Resolved', 90], ['closed', 'Closed', 100],
+]
+export const TRANSITIONS = {
+  pending_acceptance: ['accepted'], accepted: ['in_progress'],
+  in_progress: ['accepted', 'waiting_for_vendor', 'waiting_for_staff', 'resolved'],
+  waiting_for_vendor: ['in_progress', 'waiting_for_staff', 'resolved'],
+  waiting_for_staff: ['in_progress', 'waiting_for_vendor', 'resolved'],
+  resolved: ['closed', 'in_progress', 'waiting_for_vendor', 'waiting_for_staff'], closed: ['resolved'],
+}
+const REVERSES = new Set(['in_progress:accepted', 'waiting_for_vendor:in_progress', 'waiting_for_staff:in_progress', 'resolved:in_progress', 'resolved:waiting_for_vendor', 'resolved:waiting_for_staff', 'closed:resolved'])
+const labelFor = stage => TASK_PATH.find(([value]) => value === stage)?.[1] || stage?.replaceAll('_', ' ') || ''
+const percentFor = stage => TASK_PATH.find(([value]) => value === stage)?.[2] ?? 0
 
-function formatStatus(value) {
-  return value ? value.replaceAll('_', ' ') : ''
+export function TaskProgressPath({ task, interactive, onSelect }) {
+  const currentIndex = TASK_PATH.findIndex(([stage]) => stage === task.status)
+  const currentRef = useRef(null)
+  useEffect(() => { if (typeof currentRef.current?.scrollIntoView === 'function') currentRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }) }, [task.status])
+  return <div className="overflow-x-auto pb-2" aria-label="Task stage progress path">
+    <ol className="flex min-w-max" role="list">
+      {TASK_PATH.map(([stage, label, percentage], index) => {
+        const current = stage === task.status
+        const complete = index < currentIndex
+        const enabled = interactive && (TRANSITIONS[task.status] || []).includes(stage)
+        const waiting = current && stage.startsWith('waiting_')
+        const state = current ? 'current stage' : complete ? 'completed stage' : 'future stage'
+        const reason = enabled ? '' : current ? 'This is the current stage' : 'Transition unavailable from the current stage'
+        return <li key={stage} className="-ml-px first:ml-0">
+          <button ref={current ? currentRef : null} type="button" disabled={!enabled} onClick={() => enabled && onSelect(stage)}
+            aria-current={current ? 'step' : undefined} aria-label={`${label}, ${state}, ${percentage} percent complete${enabled ? ', clickable' : `, unavailable: ${reason}`}`}
+            title={reason} className={`relative min-h-14 w-40 border px-5 py-2 text-sm font-semibold focus:z-10 focus:outline-none focus:ring-4 focus:ring-blue-300 ${index ? '[clip-path:polygon(0_0,calc(100%-14px)_0,100%_50%,calc(100%-14px)_100%,0_100%,14px_50%)] pl-7' : '[clip-path:polygon(0_0,calc(100%-14px)_0,100%_50%,calc(100%-14px)_100%,0_100%)]'} ${waiting ? 'border-amber-700 bg-amber-500 text-gray-950' : current ? 'border-blue-800 bg-blue-700 text-white' : complete ? 'border-green-700 bg-green-600 text-white' : enabled ? 'border-gray-400 bg-gray-100 text-gray-900 hover:bg-blue-50' : 'border-gray-300 bg-gray-100 text-gray-500'}`}>
+            <span aria-hidden="true">{complete ? '✓ ' : ''}</span>{label}
+          </button>
+        </li>
+      })}
+    </ol>
+  </div>
 }
 
-function formatBytes(value = 0) {
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function ProgressForm({ task, onProgressUpdate }) {
-  const [note, setNote] = useState('')
-  const [percentage, setPercentage] = useState(task.progress_percentage ?? '')
-  const [error, setError] = useState('')
-
-  async function submit(event) {
-    event.preventDefault()
-    setError('')
-    if (!note.trim()) {
-      setError('Progress note is required.')
-      return
-    }
-    const numeric = percentage === '' ? null : Number(percentage)
-    if (numeric !== null && (numeric < 0 || numeric > 100)) {
-      setError('Progress percentage must be between 0 and 100.')
-      return
-    }
-    await onProgressUpdate(task, { note, percentage: numeric })
-    setNote('')
-  }
-
-  return (
-    <form onSubmit={submit} className="rounded-md border border-gray-200 bg-gray-50 p-3">
-      <label htmlFor="task-progress-note" className="block text-sm font-semibold text-gray-800">Progress Note</label>
-      <textarea id="task-progress-note" value={note} onChange={event => setNote(event.target.value)} className="mt-1 min-h-20 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
-      <label htmlFor="task-progress-percentage" className="mt-3 block text-sm font-semibold text-gray-800">Percentage Complete</label>
-      <input id="task-progress-percentage" type="number" min="0" max="100" value={percentage} onChange={event => setPercentage(event.target.value)} className="mt-1 w-32 rounded-md border border-gray-300 px-3 py-2 text-sm" />
-      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
-      <button type="submit" className="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white">Add Progress Update</button>
-    </form>
-  )
-}
-
-function AttachmentForm({ task, onAttachmentUpload }) {
-  const [file, setFile] = useState(null)
-  const [caption, setCaption] = useState('')
-  const [error, setError] = useState('')
-
-  function chooseFile(event) {
-    const selected = event.target.files?.[0]
-    setError('')
-    setFile(null)
-    if (!selected) return
-    if (!allowedUploadTypes.includes(selected.type)) {
-      setError('Upload JPEG, PNG, WebP, or PDF files only.')
-      return
-    }
-    if (selected.size > maxUploadSize) {
-      setError('Attachment exceeds the maximum allowed size of 10 MB.')
-      return
-    }
-    setFile(selected)
-  }
-
-  async function submit(event) {
-    event.preventDefault()
-    if (!file) {
-      setError('Choose a file before uploading.')
-      return
-    }
-    await onAttachmentUpload(task, { file, caption, title: caption || file.name })
-    setFile(null)
-    setCaption('')
-    event.target.reset()
-  }
-
-  return (
-    <form onSubmit={submit} className="rounded-md border border-gray-200 bg-gray-50 p-3">
-      <label htmlFor="task-attachment-file" className="block text-sm font-semibold text-gray-800">Upload Attachment</label>
-      <input id="task-attachment-file" type="file" accept={allowedUploadTypes.join(',')} onChange={chooseFile} className="mt-1 block w-full text-sm" />
-      {file && (
-        <div className="mt-2 rounded-md border border-gray-200 bg-white p-2 text-sm">
-          <p className="font-semibold text-gray-900">{file.name}</p>
-          <p className="text-xs text-gray-500">{file.type} - {formatBytes(file.size)}</p>
-          {file.type.startsWith('image/') && <img src={URL.createObjectURL(file)} alt="" className="mt-2 h-24 w-24 rounded object-cover" />}
-        </div>
-      )}
-      <label htmlFor="task-attachment-caption" className="mt-3 block text-sm font-semibold text-gray-800">Caption</label>
-      <input id="task-attachment-caption" value={caption} onChange={event => setCaption(event.target.value)} className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
-      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
-      <button type="submit" className="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white">Upload Attachment</button>
-    </form>
-  )
-}
-
-function WorkflowActionForm({ mode, task, onCancel, onWaiting, onBlocked, onComplete, onDecline }) {
-  const [reason, setReason] = useState('')
-  const [percentage, setPercentage] = useState(task.progress_percentage ?? '')
-  const [error, setError] = useState('')
-
-  const config = {
-    waiting: {
-      title: 'Mark Waiting',
-      label: 'Waiting Reason',
-      action: payload => onWaiting(task, payload),
-      buttonClass: 'bg-amber-600 hover:bg-amber-700',
-    },
-    blocked: {
-      title: 'Mark Blocked',
-      label: 'Blocking Reason',
-      action: payload => onBlocked(task, payload),
-      buttonClass: 'bg-red-600 hover:bg-red-700',
-    },
-    complete: {
-      title: 'Complete Task',
-      label: 'Completion Summary',
-      action: payload => onComplete(task, { summary: payload.reason }),
-      buttonClass: 'bg-green-600 hover:bg-green-700',
-    },
-    decline: {
-      title: 'Decline Task',
-      label: 'Decline Reason',
-      action: payload => onDecline(task, payload),
-      buttonClass: 'bg-red-600 hover:bg-red-700',
-    },
-  }[mode]
-
-  if (!config) return null
-
-  async function submit(event) {
-    event.preventDefault()
-    setError('')
-    const trimmedReason = reason.trim()
-    if (!trimmedReason) {
-      setError(`${config.label} is required.`)
-      return
-    }
-    const numeric = percentage === '' || ['complete', 'decline'].includes(mode) ? null : Number(percentage)
-    if (numeric !== null && (numeric < 0 || numeric > 100)) {
-      setError('Progress percentage must be between 0 and 100.')
-      return
-    }
-    await config.action({ reason: trimmedReason, percentage: numeric })
-    setReason('')
-    onCancel()
-  }
-
-  return (
-    <form onSubmit={submit} className="rounded-lg border border-gray-200 bg-white p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-lg font-semibold text-gray-900">{config.title}</h3>
-        <button type="button" onClick={onCancel} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700">Cancel</button>
-      </div>
-      <label htmlFor={`task-workflow-${mode}-reason`} className="mt-3 block text-sm font-semibold text-gray-800">{config.label}</label>
-      <textarea
-        id={`task-workflow-${mode}-reason`}
-        value={reason}
-        onChange={event => setReason(event.target.value)}
-        className="mt-1 min-h-20 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-      />
-      {['waiting', 'blocked'].includes(mode) && (
-        <>
-          <label htmlFor={`task-workflow-${mode}-percentage`} className="mt-3 block text-sm font-semibold text-gray-800">Percentage Complete</label>
-          <input
-            id={`task-workflow-${mode}-percentage`}
-            type="number"
-            min="0"
-            max="100"
-            value={percentage}
-            onChange={event => setPercentage(event.target.value)}
-            className="mt-1 w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
-          />
-        </>
-      )}
-      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
-      <button type="submit" className={`mt-3 rounded-md px-3 py-2 text-sm font-semibold text-white ${config.buttonClass}`}>{config.title}</button>
-    </form>
-  )
-}
-
-const STAGE_ACTIONS = {
-  accepted: [['in_progress', 'Start Work']],
-  in_progress: [['waiting_for_vendor', 'Waiting for Vendor'], ['waiting_for_staff', 'Waiting for Staff'], ['resolved', 'Mark Resolved'], ['accepted', 'Return to Accepted']],
-  waiting_for_vendor: [['in_progress', 'Resume In Progress'], ['waiting_for_staff', 'Waiting for Staff'], ['resolved', 'Mark Resolved']],
-  waiting_for_staff: [['in_progress', 'Resume In Progress'], ['waiting_for_vendor', 'Waiting for Vendor'], ['resolved', 'Mark Resolved']],
-  resolved: [['closed', 'Close Task'], ['in_progress', 'Reopen as In Progress'], ['waiting_for_vendor', 'Return to Waiting for Vendor'], ['waiting_for_staff', 'Return to Waiting for Staff']],
-  closed: [['resolved', 'Reopen as Resolved']],
-}
-
-const REVERSE_ACTIONS = new Set(['in_progress:accepted', 'waiting_for_vendor:in_progress', 'waiting_for_staff:in_progress', 'resolved:in_progress', 'resolved:waiting_for_vendor', 'resolved:waiting_for_staff', 'closed:resolved'])
-
-function StageChangeForm({ task, target, label, onCancel, onTransition }) {
-  const [note, setNote] = useState('')
-  const [reason, setReason] = useState('')
-  const [error, setError] = useState('')
-  const reverse = REVERSE_ACTIONS.has(`${task.status}:${target}`)
+function StageDialog({ task, target, onCancel, onTransition }) {
+  const [note, setNote] = useState(''); const [reason, setReason] = useState(''); const [error, setError] = useState('')
+  const reverse = REVERSES.has(`${task.status}:${target}`)
   const noteRequired = reverse || ['waiting_for_vendor', 'waiting_for_staff', 'resolved', 'closed'].includes(target)
   async function submit(event) {
-    event.preventDefault()
+    event.preventDefault(); setError('')
     if (noteRequired && !note.trim()) return setError('A progress note is required.')
     if (reverse && !reason.trim()) return setError('A reversal reason is required.')
-    await onTransition(task, { stage: target, note: note.trim(), reason: reason.trim() })
-    onCancel()
+    await onTransition(task, { stage: target, note: note.trim(), reason: reason.trim() }); onCancel()
   }
-  return <form onSubmit={submit} className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-    <h3 className="font-semibold text-gray-900">{label}</h3>
-    <label className="mt-3 block text-sm font-semibold" htmlFor="stage-note">Progress note{noteRequired ? ' *' : ''}</label>
-    <textarea id="stage-note" value={note} onChange={event => setNote(event.target.value)} className="mt-1 min-h-20 w-full rounded-md border border-gray-300 p-2" />
-    {reverse && <><label className="mt-3 block text-sm font-semibold" htmlFor="stage-reason">Reversal reason *</label><input id="stage-reason" value={reason} onChange={event => setReason(event.target.value)} className="mt-1 w-full rounded-md border border-gray-300 p-2" /></>}
+  return <form onSubmit={submit} role="dialog" aria-labelledby="stage-dialog-title" className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+    <h3 id="stage-dialog-title" className="text-lg font-semibold">Change task stage</h3>
+    <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2"><p><b>Current:</b><br />{labelFor(task.status)} — {task.progress_percentage}%</p><p><b>New:</b><br />{labelFor(target)} — {percentFor(target)}%</p></div>
+    <label htmlFor="stage-note" className="mt-3 block text-sm font-semibold">Progress note{noteRequired ? ' *' : ''}</label>
+    <textarea id="stage-note" value={note} onChange={e => setNote(e.target.value)} className="mt-1 min-h-20 w-full rounded-md border p-2" />
+    {reverse && <><label htmlFor="stage-reason" className="mt-3 block text-sm font-semibold">Reversal reason *</label><input id="stage-reason" value={reason} onChange={e => setReason(e.target.value)} className="mt-1 w-full rounded-md border p-2" /></>}
     {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
-    <div className="mt-3 flex gap-2"><button className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white">Confirm</button><button type="button" onClick={onCancel} className="rounded-md border px-3 py-2 text-sm">Cancel</button></div>
+    <div className="mt-3 flex gap-2"><button className="rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white">Change Stage</button><button type="button" onClick={onCancel} className="rounded-md border bg-white px-3 py-2 text-sm">Cancel</button></div>
   </form>
 }
 
-export default function TaskDrawer({
-  task,
-  tasks,
-  staff,
-  templates,
-  onClose,
-  onEdit,
-  onAccept,
-  onDecline,
-  onStartWork,
-  onWaiting,
-  onBlocked,
-  onResume,
-  onProgressUpdate,
-  onAttachmentUpload,
-  onComplete,
-  onDelete,
-  onReassign,
-  onChecklistToggle,
-  onApplyTemplate,
-  onComment,
-  onDependencyCreate,
-  onDependencyDelete,
-  onTransition,
-  canAssign = false,
-  canDelete = false,
-}) {
-  const [workflowMode, setWorkflowMode] = useState(null)
+function NoteForm({ task, onProgressUpdate }) {
+  const [note, setNote] = useState('')
+  return <form onSubmit={async e => { e.preventDefault(); if (!note.trim()) return; await onProgressUpdate(task, { note: note.trim() }); setNote('') }} className="mt-3 rounded-md bg-gray-50 p-3">
+    <label htmlFor="progress-note" className="text-sm font-semibold">Add progress note</label><textarea id="progress-note" required value={note} onChange={e => setNote(e.target.value)} className="mt-1 min-h-20 w-full rounded-md border p-2" />
+    <button className="mt-2 rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white">Add Note</button>
+  </form>
+}
 
+export default function TaskDrawer({ task, tasks, staff, templates, onClose, onEdit, onAccept, onDecline, onProgressUpdate, onDelete, onReassign, onChecklistToggle, onApplyTemplate, onComment, onDependencyCreate, onDependencyDelete, onTransition, canAssign=false, canDelete=false }) {
+  const [target, setTarget] = useState(null); const [declining, setDeclining] = useState(false); const [declineReason, setDeclineReason] = useState(''); const [announcement, setAnnouncement] = useState('')
   if (!task) return null
-
-  const progress = task.progress_percentage ?? 0
-
-  return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30">
-      <aside className="h-full w-full max-w-5xl overflow-y-auto bg-gray-50 p-5 shadow-xl">
-        <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">{task.title}</h2>
-            <p className="mt-1 text-sm capitalize text-gray-600">{task.task_type.replaceAll('_', ' ')} - {formatStatus(task.status)}</p>
-            <div className="mt-3 h-2 w-72 rounded-full bg-gray-200">
-              <div className="h-2 rounded-full bg-blue-600" style={{ width: `${progress}%` }} />
-            </div>
-            <p className="mt-1 text-xs text-gray-500">{progress}% complete</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {!canAssign && task.status === 'pending_acceptance' && (
-              <>
-                <button type="button" onClick={() => onAccept(task)} className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white">Accept Task</button>
-                <button type="button" onClick={() => setWorkflowMode('decline')} className="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700">Decline Task</button>
-              </>
-            )}
-            {!canAssign && (STAGE_ACTIONS[task.status] || []).map(([target, label]) => <button key={target} type="button" onClick={() => setWorkflowMode({ target, label })} className="rounded-md border border-blue-300 bg-white px-3 py-2 text-sm font-semibold text-blue-700">{label}</button>)}
-            {canAssign && <button type="button" onClick={() => onEdit(task)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700">Edit</button>}
-            {canDelete && <button type="button" onClick={() => onDelete(task)} className="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700">Delete</button>}
-            <button type="button" onClick={onClose} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700">Close</button>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {workflowMode && typeof workflowMode === 'object' && <StageChangeForm task={task} target={workflowMode.target} label={workflowMode.label} onCancel={() => setWorkflowMode(null)} onTransition={onTransition} />}
-          {workflowMode && typeof workflowMode === 'string' && (
-            <WorkflowActionForm
-              mode={workflowMode}
-              task={task}
-              onCancel={() => setWorkflowMode(null)}
-              onWaiting={onWaiting}
-              onBlocked={onBlocked}
-              onComplete={onComplete}
-              onDecline={onDecline}
-            />
-          )}
-
-          <section className="rounded-lg border border-gray-200 bg-white p-4">
-            <p className="text-sm text-gray-700">{task.description || 'No description.'}</p>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
-              <div><span className="text-gray-500">Priority</span><p className="font-semibold capitalize">{task.priority}</p></div>
-              <div><span className="text-gray-500">Due</span><p className="font-semibold">{task.due_date || '-'}</p></div>
-              <div><span className="text-gray-500">Assignee</span><p className="font-semibold">{task.assigned_user_name || '-'}</p><p className="text-xs text-gray-500">{task.assigned_user_role || ''} {task.assigned_user_email ? `- ${task.assigned_user_email}` : ''}</p></div>
-              <div><span className="text-gray-500">Latest Update</span><p className="font-semibold">{task.latest_progress_summary || '-'}</p></div>
-            </div>
-            {task.waiting_reason && <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Waiting: {task.waiting_reason}</p>}
-            {task.blocked_reason && <p className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">Blocked: {task.blocked_reason}</p>}
-            {task.completion_summary && <p className="mt-4 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-900">Completed: {task.completion_summary}</p>}
-          </section>
-
-          {canAssign && <AssignmentPanel task={task} staff={staff} onReassign={onReassign} />}
-
-          <section className="rounded-lg border border-gray-200 bg-white p-4">
-            <h3 className="text-lg font-semibold text-gray-900">Progress</h3>
-            {!canAssign && !['pending_acceptance'].includes(task.status) && <div className="mt-3"><ProgressForm task={task} onProgressUpdate={onProgressUpdate} /></div>}
-            <div className="mt-4 space-y-3">
-              {(task.progress_updates || []).map(update => (
-                <article key={update.id} className="rounded-md border border-gray-200 p-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-semibold text-gray-900">{update.created_by_name || 'Unknown user'}</p>
-                    <p className="text-xs text-gray-500">{new Date(update.created_at).toLocaleString()}</p>
-                  </div>
-                  <p className="mt-1 text-gray-700">{update.note}</p>
-                  {update.previous_stage && <p className="mt-1 text-xs font-medium text-blue-700">{formatStatus(update.previous_stage)} → {formatStatus(update.new_stage)}</p>}
-                  {update.reason && <p className="mt-1 text-xs text-gray-600">Reason: {update.reason}</p>}
-                  <p className="mt-1 text-xs capitalize text-gray-500">{formatStatus(update.status_at_time)} {update.percentage !== null && update.percentage !== undefined ? `- ${update.percentage}%` : ''}</p>
-                </article>
-              ))}
-              {!(task.progress_updates || []).length && <p className="text-sm text-gray-500">No progress updates yet.</p>}
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-gray-200 bg-white p-4">
-            <h3 className="text-lg font-semibold text-gray-900">Attachments</h3>
-            {!canAssign && task.status !== 'pending_acceptance' && <div className="mt-3"><AttachmentForm task={task} onAttachmentUpload={onAttachmentUpload} /></div>}
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-              {(task.attachments || []).filter(attachment => !attachment.archived_at).map(attachment => (
-                <a key={attachment.id} href={attachment.file_url} target="_blank" rel="noreferrer" className="rounded-md border border-gray-200 p-3 text-sm hover:border-blue-300">
-                  <p className="font-semibold text-blue-700">{attachment.original_filename || attachment.title || 'Attachment'}</p>
-                  <p className="text-xs text-gray-500">{attachment.mime_type} - {formatBytes(attachment.file_size)}</p>
-                  <p className="mt-1 text-gray-700">{attachment.caption}</p>
-                  <p className="mt-1 text-xs text-gray-500">Uploaded by {attachment.uploaded_by_name || 'Unknown'} on {new Date(attachment.created_at).toLocaleString()}</p>
-                </a>
-              ))}
-              {!(task.attachments || []).filter(attachment => !attachment.archived_at).length && <p className="text-sm text-gray-500">No attachments yet.</p>}
-            </div>
-          </section>
-
-          <ChecklistPanel task={task} templates={templates} onToggle={onChecklistToggle} onApplyTemplate={onApplyTemplate} />
-          <DependencyPanel task={task} tasks={tasks} onCreate={onDependencyCreate} onDelete={onDependencyDelete} />
-          <TaskComments task={task} onAdd={onComment} />
-          <TaskActivityTimeline task={task} />
-        </div>
-      </aside>
+  const progress = task.progress_percentage ?? percentFor(task.status)
+  async function transition(current, payload) { await onTransition(current, payload); setAnnouncement(`Task stage changed to ${labelFor(payload.stage)}, ${percentFor(payload.stage)} percent complete`) }
+  return <div className="fixed inset-0 z-40 flex justify-end bg-black/30"><aside className="h-full w-full max-w-5xl overflow-y-auto bg-gray-50 p-5 shadow-xl">
+    <p className="sr-only" aria-live="polite">{announcement}</p>
+    <div className="flex items-start justify-between gap-3"><div><h2 className="text-2xl font-bold">{task.title}</h2><p className="text-sm text-gray-600">{labelFor(task.status)}</p></div><div className="flex gap-2">{canAssign && <button onClick={() => onEdit(task)} className="rounded border bg-white px-3 py-2">Edit</button>}{canDelete && <button onClick={() => onDelete(task)} className="rounded border border-red-300 bg-white px-3 py-2 text-red-700">Delete</button>}<button onClick={onClose} className="rounded border bg-white px-3 py-2">Close</button></div></div>
+    <section className="mt-4 rounded-lg border bg-white p-4"><div className="mb-2 flex items-center justify-between"><h3 className="font-semibold">Task Progress: {progress}%</h3><span>{labelFor(task.status)}</span></div><div role="progressbar" aria-label="Task progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress} className="mb-4 h-3 rounded-full bg-gray-200"><div className="h-3 rounded-full bg-blue-700" style={{width:`${progress}%`}} /></div><TaskProgressPath task={task} interactive={!canAssign && task.status !== 'pending_acceptance'} onSelect={setTarget} />
+      {!canAssign && task.status === 'pending_acceptance' && <div className="mt-4 flex gap-2"><button onClick={() => onAccept(task)} className="rounded bg-blue-700 px-3 py-2 font-semibold text-white">Accept Task</button><button onClick={() => setDeclining(true)} className="rounded border border-red-300 px-3 py-2 text-red-700">Decline Task</button></div>}
+    </section>
+    <div className="mt-4 space-y-4">{target && <StageDialog task={task} target={target} onCancel={() => setTarget(null)} onTransition={transition} />}{declining && <form onSubmit={async e => {e.preventDefault(); await onDecline(task,{reason:declineReason}); setDeclining(false)}} className="rounded-lg border bg-white p-4"><label htmlFor="decline-reason" className="font-semibold">Decline reason *</label><textarea id="decline-reason" required value={declineReason} onChange={e=>setDeclineReason(e.target.value)} className="mt-2 min-h-20 w-full rounded border p-2"/><div className="mt-2 flex gap-2"><button className="rounded bg-red-700 px-3 py-2 text-white">Decline Task</button><button type="button" onClick={()=>setDeclining(false)}>Cancel</button></div></form>}
+      <section className="rounded-lg border bg-white p-4"><p>{task.description || 'No description.'}</p><div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4"><div>Priority<br/><b>{task.priority}</b></div><div>Due<br/><b>{task.due_date || '-'}</b></div><div>Assignee<br/><b>{task.assigned_user_name || '-'}</b></div><div>Latest update<br/><b>{task.latest_progress_summary || '-'}</b></div></div></section>
+      {canAssign && <AssignmentPanel task={task} staff={staff} onReassign={onReassign} />}
+      <section className="rounded-lg border bg-white p-4"><h3 className="text-lg font-semibold">Task History</h3>{!canAssign && task.status !== 'pending_acceptance' && <NoteForm task={task} onProgressUpdate={onProgressUpdate}/>}<div className="mt-4 space-y-3">{(task.progress_updates||[]).map(update=><article key={update.id} className="rounded border p-3 text-sm"><div className="flex justify-between"><b>{update.created_by_name || 'Unknown user'} ({update.created_by_role || 'unknown role'})</b><span>{new Date(update.created_at).toLocaleString()}</span></div><p className="mt-1">{update.note}</p>{update.previous_stage && <p className="mt-1 text-blue-800">{labelFor(update.previous_stage)} ({update.previous_percentage ?? '—'}%) → {labelFor(update.new_stage)} ({update.new_percentage ?? update.percentage}%)</p>}{update.reason && <p>Reason: {update.reason}</p>}</article>)}</div></section>
+      {canAssign && <ChecklistPanel task={task} templates={templates} onToggle={onChecklistToggle} onApplyTemplate={onApplyTemplate}/>}<DependencyPanel task={task} tasks={tasks} onCreate={onDependencyCreate} onDelete={onDependencyDelete}/><TaskComments task={task} onAdd={onComment}/><TaskActivityTimeline task={task}/>
     </div>
-  )
+  </aside></div>
 }

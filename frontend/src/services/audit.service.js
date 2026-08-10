@@ -20,6 +20,11 @@ export async function exportAuditEvents(params = {}) {
   return response.data
 }
 
+export async function clearAuditEvents() {
+  const response = await api.post('/audit-events/clear/', { confirmation: 'CLEAR' })
+  return response.data
+}
+
 export async function getLoginAttempts(params = {}) {
   const response = await api.get('/login-attempts/', { params })
   return unwrapList(response.data)

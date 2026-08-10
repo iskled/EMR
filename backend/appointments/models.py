@@ -73,6 +73,12 @@ class Appointment(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, related_name='created_appointments'
     )
+    archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='archived_appointments',
+    )
+    archive_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

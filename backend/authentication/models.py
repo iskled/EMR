@@ -35,6 +35,8 @@ class User(AbstractUser):
         ('dentist', 'Dentist'),
         ('assistant', 'Assistant'),
         ('receptionist', 'Receptionist'),
+        ('nurse', 'Nurse'),
+        ('backoffice', 'Backoffice Staff'),
     ]
 
     email = models.EmailField(unique=True)
@@ -58,6 +60,13 @@ class User(AbstractUser):
         blank=True,
         null=True
     )
+    can_manage_dentists = models.BooleanField(default=False)
+    deactivated_at = models.DateTimeField(null=True, blank=True)
+    deactivated_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='deactivated_dentist_accounts')
+    deactivation_reason = models.TextField(blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='archived_dentist_accounts')
+    archive_reason = models.TextField(blank=True)
 
     failed_login_count = models.PositiveSmallIntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)

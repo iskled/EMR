@@ -1,5 +1,9 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
+
+from patients.models import Patient
+from patients.serializers import PatientListSerializer
 
 from .models import (
     InventoryAlert,
@@ -13,6 +17,8 @@ from .models import (
     Supplier,
     adjust_stock,
     issue_stock,
+    next_inventory_identifier,
+    next_inventory_item_sku,
     receive_stock,
     update_inventory_alerts,
 )
@@ -39,6 +45,7 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 
 class InventoryItemSerializer(serializers.ModelSerializer):
+    sku = serializers.CharField(required=False, allow_blank=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
     supplier_name = serializers.CharField(source='default_supplier.name', read_only=True)
     location_name = serializers.CharField(source='storage_location.name', read_only=True)
@@ -48,6 +55,13 @@ class InventoryItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryItem
         fields = '__all__'
+
+    def create(self, validated_data):
+        validated_data['sku'] = next_inventory_item_sku(
+            validated_data.get('category'),
+            validated_data.get('default_supplier'),
+        )
+        return super().create(validated_data)
 
 
 class InventoryBatchSerializer(serializers.ModelSerializer):
@@ -68,6 +82,10 @@ class StockMovementSerializer(serializers.ModelSerializer):
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
     location_name = serializers.CharField(source='location.name', read_only=True)
     user_name = serializers.CharField(source='user.get_full_name', read_only=True)
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_code = serializers.CharField(source='patient.patient_code', read_only=True)
+    patient_phone = serializers.CharField(source='patient.phone_primary', read_only=True)
+    patient_id = serializers.UUIDField(read_only=True)
 
     class Meta:
         model = StockMovement
@@ -125,7 +143,7 @@ class InventoryAlertSerializer(serializers.ModelSerializer):
 
 class StockReceiptSerializer(serializers.Serializer):
     item = serializers.PrimaryKeyRelatedField(queryset=InventoryItem.objects.all())
-    batch_number = serializers.CharField()
+    batch_number = serializers.CharField(required=False, allow_blank=True)
     quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all(), required=False, allow_null=True)
     storage_location = serializers.PrimaryKeyRelatedField(queryset=InventoryLocation.objects.all(), required=False, allow_null=True)
@@ -139,7 +157,7 @@ class StockReceiptSerializer(serializers.Serializer):
         try:
             return receive_stock(
                 item=self.validated_data['item'],
-                batch_number=self.validated_data['batch_number'],
+                batch_number=self.validated_data.get('batch_number', ''),
                 quantity=self.validated_data['quantity'],
                 user=self.context['request'].user,
                 supplier=self.validated_data.get('supplier'),
@@ -159,7 +177,8 @@ class StockUsageSerializer(serializers.Serializer):
     batch = serializers.PrimaryKeyRelatedField(queryset=InventoryBatch.objects.all(), required=False, allow_null=True)
     storage_location = serializers.PrimaryKeyRelatedField(queryset=InventoryLocation.objects.all(), required=False, allow_null=True)
     quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
-    patient_id = serializers.UUIDField(required=False, allow_null=True)
+    patient = serializers.PrimaryKeyRelatedField(queryset=Patient.objects.all(), required=False, allow_null=True)
+    patient_id = serializers.PrimaryKeyRelatedField(queryset=Patient.objects.all(), source='patient', required=False, allow_null=True, write_only=True)
     appointment_id = serializers.UUIDField(required=False, allow_null=True)
     clinical_note_id = serializers.UUIDField(required=False, allow_null=True)
     orthodontic_visit_id = serializers.IntegerField(required=False, allow_null=True)
@@ -174,13 +193,80 @@ class StockUsageSerializer(serializers.Serializer):
                 quantity=self.validated_data['quantity'],
                 user=self.context['request'].user,
                 notes=self.validated_data['reason'],
-                patient_id=self.validated_data.get('patient_id'),
+                patient=self.validated_data.get('patient'),
                 appointment_id=self.validated_data.get('appointment_id'),
                 clinical_note_id=self.validated_data.get('clinical_note_id'),
                 orthodontic_visit_id=self.validated_data.get('orthodontic_visit_id'),
             )
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.messages)
+
+
+class BulkStockUsageItemSerializer(serializers.Serializer):
+    inventory_item = serializers.PrimaryKeyRelatedField(queryset=InventoryItem.objects.all())
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    reason = serializers.CharField(required=False, allow_blank=True)
+
+
+class BulkStockUsageSerializer(serializers.Serializer):
+    patient = serializers.PrimaryKeyRelatedField(queryset=Patient.objects.all())
+    usage_date = serializers.DateField(required=False)
+    appointment = serializers.UUIDField(required=False, allow_null=True)
+    clinical_note = serializers.UUIDField(required=False, allow_null=True)
+    orthodontic_visit = serializers.IntegerField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    items = BulkStockUsageItemSerializer(many=True)
+
+    def validate_items(self, items):
+        if not items:
+            raise serializers.ValidationError('At least one inventory item is required.')
+        merged = {}
+        for entry in items:
+            item = entry['inventory_item']
+            key = item.pk
+            if key not in merged:
+                merged[key] = {**entry}
+            else:
+                merged[key]['quantity'] += entry['quantity']
+                reasons = [merged[key].get('reason', ''), entry.get('reason', '')]
+                merged[key]['reason'] = '; '.join(reason for reason in reasons if reason)
+        return list(merged.values())
+
+    def save(self, **kwargs):
+        patient = self.validated_data['patient']
+        notes = self.validated_data.get('notes', '')
+        correlation_id = kwargs.get('correlation_id', '')
+        created_movements = []
+        try:
+            with transaction.atomic():
+                for entry in self.validated_data['items']:
+                    reason = entry.get('reason') or notes or 'Inventory usage'
+                    issue_stock(
+                        item=entry['inventory_item'],
+                        quantity=entry['quantity'],
+                        user=self.context['request'].user,
+                        notes=reason,
+                        patient=patient,
+                        appointment_id=self.validated_data.get('appointment'),
+                        clinical_note_id=self.validated_data.get('clinical_note'),
+                        orthodontic_visit_id=self.validated_data.get('orthodontic_visit'),
+                        source_model='InventoryUsageBatch',
+                        source_id=correlation_id,
+                    )
+                created_movements = list(
+                    StockMovement.objects
+                    .select_related('item', 'batch', 'location', 'user', 'patient')
+                    .filter(source_model='InventoryUsageBatch', source_id=correlation_id)
+                    .order_by('created_at', 'pk')
+                )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return {
+            'patient': patient,
+            'movements': created_movements,
+            'usage_count': len(created_movements),
+            'correlation_id': correlation_id,
+        }
 
 
 class StockAdjustmentSerializer(serializers.Serializer):
